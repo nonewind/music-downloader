@@ -4,6 +4,21 @@
 
 > 技术架构、目录结构、数据模型、API 接口等开发细节见 [docs/技术文档.md](docs/技术文档.md)。
 
+## 关于本 Fork
+
+本仓库是 [chongya369/music-downloader](https://github.com/chongya369/music-downloader) 的个人 fork（[nonewind/music-downloader](https://github.com/nonewind/music-downloader)），自 **v0.7.6.5** 起与上游产生方向性偏差，独立演进维护。
+
+**Fork 的目标**：
+
+- **下载治理优先**：下载产物安全（不误删/不误覆盖已有文件）、数据库记录与磁盘文件一致（历史标记成功但文件已丢失时，重新发起下载自动放行而不是被"已下载"拦截）、路径超长截断保护文件名中的歌曲 ID——详见 [更新日志](docs/CHANGELOG.md) v0.7.6.5 起的条目
+- **音质升级闭环**（规划中）：支持"已下低音质 → 重新下载高音质"的安全替换流程，含降级保护（不允许把无损悄悄重下成低音质）
+- **测试与守护**：引入 pytest 测试设施与回归测试，改动先测后修，不为局部问题引入复杂架构
+- **面向 fnOS 部署的个人自用优化**
+
+**与上游的关系**：持续跟进上游更新；通用性修复仍尽量以 PR 回馈上游（如已合并的 #7 同名歌曲冲突修复）。本仓库的治理方向与界面调整暂不向上游提 PR，仅在 fork 内演进。
+
+以下功能与使用说明保留自上游，对本仓库同样适用。
+
 ## 功能特性
 
 - **三平台支持**：网易云 / QQ 音乐 / 酷狗音乐账号管理、歌单同步与下载（三平台均支持扫码登录）
@@ -209,4 +224,4 @@ chmod +x build_linux.sh && ./build_linux.sh
 
 ## 版本
 
-当前版本：**0.7.6**（见 [version.txt](version.txt)，更新日志见 [docs/CHANGELOG.md](docs/CHANGELOG.md)）
+当前版本：**0.7.6.5**（见 [version.txt](version.txt)，更新日志见 [docs/CHANGELOG.md](docs/CHANGELOG.md)）
