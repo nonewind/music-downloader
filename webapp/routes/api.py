@@ -1869,12 +1869,16 @@ def discover_search():
     # 标记已下载/进行中（仅歌曲模式需要；song_id 统一 str + platform 维度查询）
     with db.session.no_autoflush:
         downloaded_ids = set()
+        downloaded_qualities = {}
         if items:
             ids = [str(t["id"]) for t in items if t.get("id")]
-            rows = db.session.query(Song.id).filter(
+            rows = db.session.query(Song.id, Song.quality).filter(
                 Song.id.in_(ids), Song.platform == platform, Song.status == "success"
             ).all()
             downloaded_ids = {r[0] for r in rows}
+            # 已下载档位映射（仅 success 记录；Song 主键 (id, platform) 下同 ID 单条，
+            # 前端确认框用其展示"已有文件音质"；空档位不入映射，quality 未知省略展示）
+            downloaded_qualities = {r[0]: r[1] for r in rows if r[1]}
             pending_rows = db.session.query(DownloadTask.song_id).filter(
                 DownloadTask.song_id.in_(ids),
                 DownloadTask.platform == platform,
@@ -1896,6 +1900,8 @@ def discover_search():
             "page": page,
             "pages": pages,
             "type": "song",
+            # 新增字段（TASK-04b）：已下载歌曲音质映射，原字段不动向后兼容
+            "downloaded_qualities": downloaded_qualities,
         },
     })
 

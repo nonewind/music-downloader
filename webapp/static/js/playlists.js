@@ -80,6 +80,9 @@ async function loadDefaultPlaylistLimit() {
         if (!isNaN(val) && val > 0) {
             defaultPlaylistLimit = val;
         }
+        // 缓存到全局（app.js 的 window.CACHED_SETTINGS）：重复下载确认框
+        // 用 level_<platform> 展示"当前设置音质"的中文名
+        window.CACHED_SETTINGS = Object.assign({}, window.CACHED_SETTINGS, data.data || {});
     } catch (e) {
         console.error("加载默认下载数量失败:", e);
     }
@@ -634,6 +637,8 @@ async function loadSearchResults() {
             }).join("");
             bindAlbumDownload();
         } else {
+            // 已下载档位映射（角标接口 TASK-04b 新增字段）：确认框展示"已有文件音质"
+            const dlQualMap = d.downloaded_qualities || {};
             tbody.innerHTML = list.map((s, idx) => {
                 const feeText = s.fee === 1
                     ? '<span class="badge bg-warning">VIP</span>'
@@ -643,6 +648,7 @@ async function loadSearchResults() {
                     : '<span class="badge bg-light text-dark">未下载</span>';
                 // 已下载不再禁用按钮：点击走二次确认 + force 重新下载
                 const btnCls = s.downloaded ? "btn-outline-secondary" : "btn-outline-primary";
+                const existQuality = dlQualMap[String(s.id)] || "";
                 return `
                     <tr>
                         <td>${(curPage - 1) * limit + idx + 1}</td>
@@ -655,7 +661,8 @@ async function loadSearchResults() {
                             <button class="btn btn-sm ${btnCls} btn-dl-single"
                                 data-id="${s.id}" data-name="${escapeHtml(s.name)}"
                                 data-artists="${escapeHtml(s.artists)}" data-fee="${s.fee}"
-                                data-downloaded="${s.downloaded ? "1" : "0"}">
+                                data-downloaded="${s.downloaded ? "1" : "0"}"
+                                data-downloaded-quality="${escapeHtml(existQuality)}">
                                 <i class="bi bi-download"></i>
                             </button>
                         </td>
@@ -692,7 +699,15 @@ function bindSingleDownload() {
             const fee = parseInt(this.dataset.fee) || 0;
             let force = false;
             if (this.dataset.downloaded === "1") {
-                if (!confirm(`《${name}》已下载过，重新下载？`)) return;
+                // 已有档位取自角标接口 downloaded_qualities（未知则省略括号）；
+                // 本次档位取全局缓存的设置（未加载过 /api/settings 则省略档位名）。
+                // 不改请求参数：force 语义不变，降档由后端自动跳过保护兜底。
+                const existQ = get_quality_name(this.dataset.downloadedQuality || "");
+                const curQ = get_current_quality_name(_currentPlatform);
+                const msg = `《${name}》已下载过${existQ ? `（${existQ}）` : ""}。` +
+                    `将${curQ ? `以当前设置音质（${curQ}）` : ""}重新下载？\n` +
+                    "若实际取得音质低于已有文件，任务将自动跳过保护。";
+                if (!confirm(msg)) return;
                 force = true;
             }
             this.disabled = true;

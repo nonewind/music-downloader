@@ -88,6 +88,45 @@ function formatSize(bytes) {
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
 }
 
+// ============================================================
+// 音质档位中文名映射（TASK-04b）
+// ============================================================
+// 仅用于展示（历史列表音质列、重复下载确认弹窗）；设置页 select 的
+// option 是表单值，不受此映射影响。文案取自设置页各平台选项的通用
+// 部分（去掉平台相关 VIP 标注）；higher 不在设置页选项中但属降级链
+// 档位（core.providers.base QUALITY_ORDER），历史记录可能出现，一并收录。
+window.QUALITY_NAMES = {
+    standard: "标准 128kbps",
+    higher: "较高 192kbps",
+    exhigh: "极高 320kbps",
+    lossless: "无损 FLAC",
+    hires: "Hi-Res",
+    jymaster: "超清母带",
+    ogg640: "OGG 640kbps",
+    jyeffect: "高清臻音",
+    dolby: "杜比全景声",
+    vivid: "臻音全景声",
+    sky: "沉浸环绕声",
+};
+
+// 档位中文名：已知档位返回映射，未知档位原样返回英文值，空值返回空串
+// （调用方可用 `get_quality_name(v) || "--"` 兜底）
+function get_quality_name(v) {
+    if (!v) return "";
+    return window.QUALITY_NAMES[v] || v;
+}
+
+// 全局设置缓存：任何页面加载过 /api/settings 后写入（见 playlists.js
+// loadDefaultPlaylistLimit）；未加载过的页面保持空对象，取档位时返回空串
+window.CACHED_SETTINGS = window.CACHED_SETTINGS || {};
+
+// 当前设置音质的中文名（level_<platform> 未缓存时返回空串，由调用方
+// 省略"当前设置音质（xx）"中的档位名）
+function get_current_quality_name(platform) {
+    const lv = window.CACHED_SETTINGS["level_" + platform] || "";
+    return lv ? get_quality_name(lv) : "";
+}
+
 // 时长格式化
 function formatDuration(ms) {
     if (!ms) return "--";

@@ -237,9 +237,11 @@ async function loadSongs(page = 1) {
             }
             if (s.status === "success") {
                 // 重新下载：force 通道跳过后端已下载拦截（点击时有二次确认）
+                // data-quality 带下载时刻快照档位，供确认框展示（TASK-04b）
                 actions.push(`<button class="btn btn-sm btn-outline-secondary btn-redownload"
                     data-id="${escapeHtml(String(s.id))}" data-platform="${escapeHtml(platform)}"
                     data-name="${escapeHtml(s.name)}" data-artists="${escapeHtml(s.artists)}"
+                    data-quality="${escapeHtml(s.quality || "")}"
                     title="重新下载"><i class="bi bi-arrow-repeat"></i></button>`);
             }
             actions.push(`<button class="btn btn-sm btn-outline-danger btn-delete-song" data-id="${s.pk}"
@@ -255,7 +257,7 @@ async function loadSongs(page = 1) {
                         : escapeHtml(s.name)}${s.album ? `<br><small class="text-muted">${escapeHtml(s.album)}</small>` : ""}</td>
                     <td>${escapeHtml(s.artists)}</td>
                     <td><small class="text-muted">${escapeHtml(s.playlist_name || '--')}</small></td>
-                    <td>${s.quality || '--'}</td>
+                    <td>${get_quality_name(s.quality) || '--'}</td>
                     <td>${size}</td>
                     <td><small>${time}</small></td>
                     <td>${statusCell}</td>
@@ -367,7 +369,15 @@ function bindSongEvents() {
     document.querySelectorAll(".btn-redownload").forEach(el => {
         el.addEventListener("click", async function() {
             const { id, platform, name, artists } = this.dataset;
-            if (!confirm(`《${name}》已下载过，重新下载？`)) return;
+            // 快照档位已知时明确告知原档位与降档保护；快照为空（存量记录）退回原文案。
+            // 仅改文案：请求参数不变（force 语义不变）
+            const qName = get_quality_name(this.dataset.quality || "");
+            if (qName) {
+                if (!confirm(`该记录为「${qName}」音质，将按当前设置重新下载？\n` +
+                    "若实际取得音质低于已有文件，任务将自动跳过保护。")) return;
+            } else {
+                if (!confirm(`《${name}》已下载过，重新下载？`)) return;
+            }
             this.disabled = true;
             try {
                 // fee 未知按 VIP 传：VIP 账号能下免费歌，按免费传则 VIP 歌会被卡
