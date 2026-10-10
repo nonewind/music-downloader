@@ -129,15 +129,97 @@ function updateSyncIndicator(active) {
 async function refreshGlobalTaskStatus() {
     try {
         const data = await api("/api/tasks");
+        const tasks = data.data || [];
         // 用服务端 has_active（存在未被暂停的在途任务）而非任务数量：
         // 「暂停全部」后任务仍在列表中，按数量判断会让导航栏恒显"下载中"，
         // 与用户刚点下的暂停语义冲突。判定逻辑放服务端可避免与后端语义漂移
         updateSyncIndicator(!!data.has_active);
+        // 底部状态栏：队列摘要 + 当前下载项
+        renderStatusbar(tasks, !!data.paused_all);
     } catch (e) {
         // 静默失败：指示器是辅助信息，不应弹错提示
         console.error("刷新任务状态失败:", e);
     }
 }
+
+// ============================================================
+// 底部状态栏渲染（由 refreshGlobalTaskStatus 每 2 秒驱动）
+// ============================================================
+// 摘要段：下载中/排队/暂停分段计数（0 值段省略）；paused_all 优先展示
+// 当前段：第一个 downloading 任务的「歌名 - 第一位歌手」+ 迷你进度条
+function renderStatusbar(tasks, pausedAll) {
+    const summary = document.getElementById("statusSummary");
+    if (!summary) return;
+    const nDownloading = tasks.filter(t => t.status === "downloading").length;
+    const nPending = tasks.filter(t => t.status === "pending").length;
+    const nPaused = tasks.filter(t => t.status === "paused").length;
+
+    if (pausedAll) {
+        summary.innerHTML = '<i class="bi bi-pause-circle"></i> 已全部暂停';
+    } else if (nDownloading + nPending + nPaused > 0) {
+        const segs = [];
+        if (nDownloading) segs.push("下载中 " + nDownloading);
+        if (nPending) segs.push("排队 " + nPending);
+        if (nPaused) segs.push("暂停 " + nPaused);
+        summary.innerHTML = '<i class="bi bi-download"></i> ' + segs.join(" · ");
+    } else {
+        summary.innerHTML = '<i class="bi bi-check-circle"></i> 队列空闲';
+    }
+
+    const current = document.getElementById("statusCurrent");
+    if (!current) return;
+    const downloading = tasks.find(t => t.status === "downloading");
+    if (downloading) {
+        const pct = Math.max(0, Math.min(100, downloading.progress || 0));
+        const firstArtist = String(downloading.artists || "").split("/")[0].trim();
+        current.innerHTML =
+            '<span class="status-current-text">' + escapeHtml(downloading.song_name + " - " + firstArtist) + "</span>" +
+            '<span class="status-progress"><span class="status-progress-bar" style="width:' + pct + '%"></span></span>';
+        current.classList.remove("d-none");
+    } else if (nPending > 0) {
+        current.textContent = "待下载 " + nPending + " 首";
+        current.classList.remove("d-none");
+    } else {
+        current.classList.add("d-none");
+    }
+}
+
+// 点击/回车状态栏 → 下载页（APP_BASE 拼法与 api()/accounts.js 导出跳转一致）
+const _appStatusbar = document.getElementById("appStatusbar");
+if (_appStatusbar) {
+    const _goHistory = () => {
+        window.location.href = (window.APP_BASE || "") + "/history";
+    };
+    _appStatusbar.addEventListener("click", _goHistory);
+    _appStatusbar.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            _goHistory();
+        }
+    });
+}
+
+// ============================================================
+// 顶栏二级面包屑：各页切页内标签时调用
+// ============================================================
+// name 为空/null → 隐藏分隔符与子标题；否则写入文本并显示
+// app.js 先于各页脚本加载，页内可直接调用 AppUI.setSubTab(...)
+window.AppUI = {
+    setSubTab(name) {
+        const sep = document.querySelector(".crumb-sep");
+        const sub = document.getElementById("crumbSub");
+        if (!sep || !sub) return;
+        if (!name) {
+            sub.textContent = "";
+            sep.classList.add("d-none");
+            sub.classList.add("d-none");
+        } else {
+            sub.textContent = name;
+            sep.classList.remove("d-none");
+            sub.classList.remove("d-none");
+        }
+    },
+};
 
 // DOM 就绪后启动轮询（兼容已加载完和未加载完两种情况）
 function startGlobalStatusPolling() {

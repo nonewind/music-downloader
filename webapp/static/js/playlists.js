@@ -9,6 +9,18 @@ let defaultPlaylistLimit = 50;  // 添加歌单时的默认下载数量（来自
 let _currentPlatform = "netease";
 let _platformState = {};
 
+// 发现页二级 pill -> 面包屑文案
+const DISCOVER_PILL_TITLES = {
+    toplists: "官方排行榜",
+    hot: "热门歌单",
+    search: "搜索歌手",
+};
+
+// 面包屑：发现页二级位置（含平台切换恢复的场景）
+function setDiscoverCrumb(subtab) {
+    AppUI.setSubTab("发现 / " + (DISCOVER_PILL_TITLES[subtab] || subtab));
+}
+
 function getPlatformState(platform) {
     if (!_platformState[platform]) {
         _platformState[platform] = {
@@ -39,6 +51,7 @@ function _restorePlatformState(platform) {
     });
     document.querySelectorAll("#tab-discover [id^='subtab-']").forEach(el => el.classList.add("d-none"));
     document.getElementById("subtab-" + state.subtab).classList.remove("d-none");
+    setDiscoverCrumb(state.subtab);
 
     // 同步搜索框与表格显示状态
     document.getElementById("search-type").value = _searchState.type;
@@ -91,6 +104,7 @@ document.querySelectorAll("#playlist-tabs .nav-link").forEach(el => {
         if (tab === "mine") {
             document.getElementById("tab-mine").classList.remove("d-none");
             document.getElementById("tab-discover").classList.add("d-none");
+            AppUI.setSubTab("");
             // 切回时重新拉取，保证发现页/弹窗新添加的歌单立即可见
             loadPlaylists();
             return;
@@ -109,6 +123,7 @@ document.querySelectorAll("#playlist-tabs .nav-link").forEach(el => {
             // 隐藏 mine，显示 discover
             document.getElementById("tab-mine").classList.add("d-none");
             document.getElementById("tab-discover").classList.remove("d-none");
+            AppUI.setSubTab("发现");
             // 恢复该平台状态
             _restorePlatformState(platform);
         }
@@ -289,6 +304,8 @@ document.querySelectorAll("#discover-subtabs .nav-link").forEach(el => {
         document.getElementById("subtab-hot").classList.add("d-none");
         document.getElementById("subtab-search").classList.add("d-none");
         document.getElementById("subtab-" + subtab).classList.remove("d-none");
+        // 顶栏二级面包屑联动
+        setDiscoverCrumb(subtab);
         // 首次切到排行榜时加载
         if (subtab === "toplists" && !window._toplistsLoaded) {
             window._toplistsLoaded = true;
@@ -461,6 +478,8 @@ document.getElementById("btn-hot-next").addEventListener("click", () => {
 // 初始化：加载我的歌单 + 默认下载数量
 loadPlaylists();
 loadDefaultPlaylistLimit();
+// 面包屑初始为一级「我的歌单」（模板默认激活项），无二级标题
+AppUI.setSubTab("");
 
 // ==================================================================
 // 搜索歌手

@@ -60,6 +60,25 @@ document.querySelectorAll("#platform-tabs .nav-link").forEach(el => {
     });
 });
 
+// 顶栏二级面包屑：跟随平台 Tab 切换（Bootstrap 原生 tab 事件，按钮无
+// data-bs-target 也会触发 shown.bs.tab）。按钮内含计数徽章，取首个
+// 文本节点，避免把数字带进面包屑
+function platformTabLabel(btn) {
+    return btn.firstChild && btn.firstChild.nodeType === Node.TEXT_NODE
+        ? btn.firstChild.textContent.trim()
+        : btn.textContent.trim();
+}
+document.querySelectorAll('#platform-tabs button[data-bs-toggle="tab"]').forEach(btn => {
+    btn.addEventListener("shown.bs.tab", function() {
+        AppUI.setSubTab(platformTabLabel(btn));
+    });
+});
+// 页面加载时按当前激活的平台 Tab 初始化一次
+const activeTabBtn = document.querySelector('#platform-tabs button[data-bs-toggle="tab"].active');
+if (activeTabBtn) {
+    AppUI.setSubTab(platformTabLabel(activeTabBtn));
+}
+
 // 加载账号列表
 async function loadAccounts() {
     try {

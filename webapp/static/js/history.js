@@ -18,8 +18,18 @@ document.querySelectorAll("#download-tabs .nav-link").forEach(el => {
             tabHistory.style.display = "";
             loadSongs(1);
         }
+        // 顶栏二级面包屑联动
+        AppUI.setSubTab(subTabTitle(currentSubTab));
     });
 });
+
+// 子标签 -> 面包屑文案
+function subTabTitle(tab) {
+    return tab === "tasks" ? "下载任务" : "下载历史";
+}
+
+// 页面加载时按当前子标签初始化一次二级面包屑
+AppUI.setSubTab(subTabTitle(currentSubTab));
 
 // 任务项骨架（名称/歌手静态渲染一次，动态字段由 updateTaskItem 更新）
 function buildTaskItem(t) {
