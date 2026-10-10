@@ -216,6 +216,14 @@ def settings():
     return render_template("settings.html", active_page="settings", current_user=current_user())
 
 
+@views_bp.route("/organize")
+@login_required()
+@admin_required
+def organize():
+    """音乐整理页（仅管理员，与 /users 同款限制写法）"""
+    return render_template("organize.html", active_page="organize", current_user=current_user())
+
+
 @views_bp.route("/users")
 @login_required()
 @admin_required

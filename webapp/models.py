@@ -346,6 +346,8 @@ DEFAULT_SETTINGS = {
     "exclude_keywords": "",
     # 排除过滤应用范围：逗号分隔，如 "playlist,search"（两者都应用）/ "playlist" / "search" / ""（都不应用）
     "exclude_scope": "playlist,search",
+    # 音乐整理：清理重复文件时是否直接删除（false=移入下载目录 .trash 回收站）
+    "organize_direct_delete": "false",
 }
 
 

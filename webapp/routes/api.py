@@ -32,10 +32,14 @@
 - POST   /api/ncm/qr/create       生成网易云扫码登录二维码
 - POST   /api/ncm/qr/check        轮询网易云扫码登录状态（成功含 cookie）
 - POST   /api/accounts/<aid>/test 测试账号登录（netease/qq 平台）
+- POST   /api/organize/scan       扫描下载目录找出重复音乐文件（仅管理员）
+- POST   /api/organize/clean      清理选中的重复文件（回收站/直接删除，仅管理员）
 """
 
 import logging
+import shutil
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import json as _json
@@ -46,6 +50,7 @@ from sqlalchemy import func
 from auth import current_user
 from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES
 from core.providers.base import MusicProvider
+from core.organizer import scan_directory, group_duplicates
 from core.providers.netease.client import OFFICIAL_TOPLISTS
 from core.providers.netease.parse_links import parse_playlist_id
 from core.providers.kugou import bridge as kugou_bridge
@@ -2120,3 +2125,231 @@ def delete_user(uid: int):
     db.session.commit()
     logger.info("删除用户: %s", user.username)
     return jsonify({"code": 0, "msg": f"用户 '{user.username}' 已删除"})
+
+
+# ======================================================================
+# 音乐整理（重复文件扫描 / 回收站清理）
+# ----------------------------------------------------------------------
+# 用户手动触发的独立功能，不与下载流程联动：scan 只读文件，clean 按白名单
+# 移入回收站（或设置开启后直接删除），并按需把 Song.file_path 联动重指。
+# ======================================================================
+def _organize_validate_path(raw: str, out_dir: Path) -> tuple[Path | None, str]:
+    """校验整理清理涉及的路径（白名单思路与 _delete_song_file 同款，此处
+    覆盖「删除」与「repair 保留」两侧）：
+    resolve 后必须位于下载目录内、不得位于回收站 .trash 内、必须是存在的文件。
+
+    Returns:
+        (解析后的绝对路径, 失败原因)。通过时原因返回空串。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, "空路径"
+    try:
+        path = Path(raw).resolve()
+    except (OSError, ValueError) as e:
+        return None, f"无效路径（{e}）"
+    if not path.is_relative_to(out_dir):
+        return None, "路径不在下载目录内"
+    try:
+        rel_parts = path.relative_to(out_dir).parts
+    except ValueError:
+        return None, "路径不在下载目录内"
+    if ".trash" in rel_parts:
+        return None, "路径位于回收站 .trash 内"
+    if not path.exists():
+        return None, "文件不存在"
+    if not path.is_file():
+        return None, "不是文件"
+    return path, ""
+
+
+def _move_to_trash(path: Path, out_dir: Path) -> Path:
+    """把文件移入下载目录下的 .trash 回收站（目录自动创建）
+
+    同名冲突时在扩展名前追加时间戳后缀 `_YYYYmmddHHMMSS`；同一秒仍冲突
+    （极端场景）再追加 `_N` 序号，保证回收站既有文件不被覆盖。
+
+    Returns:
+        移动后的实际落点路径
+    """
+    trash_dir = out_dir / ".trash"
+    trash_dir.mkdir(parents=True, exist_ok=True)
+    target = trash_dir / path.name
+    if target.exists():
+        ts = datetime.now().strftime("%Y%m%d%H%M%S")
+        target = trash_dir / f"{path.stem}_{ts}{path.suffix}"
+        n = 1
+        while target.exists():
+            target = trash_dir / f"{path.stem}_{ts}_{n}{path.suffix}"
+            n += 1
+    shutil.move(str(path), str(target))
+    return target
+
+
+@api_bp.route("/organize/scan", methods=["POST"])
+def organize_scan():
+    """扫描下载目录，找出重复音乐文件（仅管理员，同步执行，只读不写）
+
+    响应 data：
+        scanned:    扫描到的音频文件总数
+        duration_s: 扫描+分组耗时（秒）
+        groups:     [{group_type: "same_id"|"identical", recommended: 保留路径,
+                      items: [{path, filename, rel, ext, size, mtime, song_id,
+                               title, artist, album, duration_ms, bitrate_kbps,
+                               sample_rate, channels, bits_per_sample, lossless}]}]
+    """
+    err = _require_admin()
+    if err:
+        return err
+    out_dir = _resolve_output_dir()
+    if not out_dir.is_dir():
+        return jsonify({"code": 1, "msg": "下载目录不存在"})
+
+    started = time.perf_counter()
+    try:
+        entries = scan_directory(out_dir)
+        groups = group_duplicates(entries)
+    except Exception as e:
+        logger.exception("音乐整理扫描失败: %s", e)
+        return jsonify({"code": 1, "msg": f"扫描失败: {e}"})
+    duration_s = round(time.perf_counter() - started, 3)
+
+    item_cache: dict[str, dict] = {}
+
+    def _item(entry) -> dict:
+        key = str(entry.path)
+        if key not in item_cache:
+            try:
+                rel = entry.path.relative_to(out_dir).as_posix()
+            except ValueError:
+                rel = Path(entry.path).as_posix()
+            item_cache[key] = {
+                "path": str(entry.path),
+                "filename": entry.path.name,
+                "rel": rel,
+                "ext": entry.ext,
+                "size": entry.size,
+                "mtime": entry.mtime,
+                "song_id": entry.song_id,
+                "title": entry.title,
+                "artist": entry.artist,
+                "album": entry.album,
+                "duration_ms": entry.duration_ms,
+                "bitrate_kbps": entry.bitrate_kbps,
+                "sample_rate": entry.sample_rate,
+                "channels": entry.channels,
+                "bits_per_sample": entry.bits_per_sample,
+                "lossless": entry.lossless,
+            }
+        return item_cache[key]
+
+    data_groups = [
+        {
+            "group_type": g.group_type,
+            "recommended": g.recommended,
+            "items": [_item(e) for e in g.items],
+        }
+        for g in groups
+    ]
+    logger.info("音乐整理扫描: 目录=%s 文件=%d 重复组=%d 耗时=%.2fs",
+                out_dir, len(entries), len(groups), duration_s)
+    return jsonify({
+        "code": 0,
+        "data": {
+            "scanned": len(entries),
+            "duration_s": duration_s,
+            "groups": data_groups,
+        },
+    })
+
+
+@api_bp.route("/organize/clean", methods=["POST"])
+def organize_clean():
+    """清理选中的重复音乐文件（仅管理员）
+
+    请求体：{"delete_paths": [...], "repair": {"<被删路径>": "<保留路径>"}}
+    删除模式由设置 organize_direct_delete 控制（默认 false=移入 .trash 回收站；
+    true=直接删除）。逐条白名单校验：必须在下载目录内、不在 .trash 内、存在；
+    校验失败的路径记入 failed 并继续处理其余。
+
+    repair：删除成功且保留文件校验通过（同白名单）时，把 file_path 指向被删
+    文件的 Song 记录重指到保留文件并更新 file_size；quality 语义是交付档位，
+    刻意不动。
+
+    响应 data：{"deleted": [...], "failed": [{path, reason}],
+                "repaired": [{song: "platform/id", from, to}]}
+    """
+    err = _require_admin()
+    if err:
+        return err
+    out_dir = _resolve_output_dir()
+    if not out_dir.is_dir():
+        return jsonify({"code": 1, "msg": "下载目录不存在"})
+
+    data = _json_body()
+    delete_paths = data.get("delete_paths")
+    if not isinstance(delete_paths, list) or not delete_paths:
+        return jsonify({"code": 1, "msg": "缺少 delete_paths 列表"})
+    repair = data.get("repair")
+    if not isinstance(repair, dict):
+        repair = {}
+    direct = Setting.get("organize_direct_delete", "false") == "true"
+
+    deleted: list[str] = []
+    failed: list[dict] = []
+    repaired: list[dict] = []
+    for raw in delete_paths[:1000]:
+        if not isinstance(raw, str):
+            failed.append({"path": str(raw), "reason": "路径必须是字符串"})
+            continue
+        path, reason = _organize_validate_path(raw, out_dir)
+        if path is None:
+            failed.append({"path": raw, "reason": reason})
+            continue
+        try:
+            if direct:
+                path.unlink()
+            else:
+                _move_to_trash(path, out_dir)
+        except OSError as e:
+            logger.warning("整理清理文件失败: %s (%s)", path, e)
+            failed.append({"path": raw, "reason": str(e)})
+            continue
+        deleted.append(str(path))
+
+        # Song 联动（repair）：全表 file_path 比对（历史行量小，可接受）
+        keep_raw = repair.get(raw)
+        if not (isinstance(keep_raw, str) and keep_raw.strip()):
+            continue
+        keep_path, keep_reason = _organize_validate_path(keep_raw, out_dir)
+        if keep_path is None:
+            logger.warning("整理 repair 保留文件校验未通过，跳过修复: %s (%s)",
+                           keep_raw, keep_reason)
+            continue
+        try:
+            keep_size = keep_path.stat().st_size
+        except OSError as e:
+            logger.warning("整理 repair 读取保留文件大小失败，file_size 置 0: %s (%s)",
+                           keep_path, e)
+            keep_size = 0
+        for song in Song.query.filter(Song.file_path != "").all():
+            if not _same_file_path(song.file_path, str(path)):
+                continue
+            song.file_path = str(keep_path)
+            song.file_size = keep_size
+            repaired.append({
+                "song": f"{song.platform}/{song.id}",
+                "from": str(path),
+                "to": str(keep_path),
+            })
+            logger.info("整理 repair: Song(%s/%s) %s -> %s",
+                        song.platform, song.id, path, keep_path)
+    db.session.commit()
+
+    logger.info("音乐整理清理(%s): 删除 %d / 失败 %d / 修复 %d",
+                "直接删除" if direct else "移入回收站",
+                len(deleted), len(failed), len(repaired))
+    return jsonify({
+        "code": 0,
+        "data": {"deleted": deleted, "failed": failed, "repaired": repaired},
+    })
