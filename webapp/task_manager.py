@@ -39,6 +39,7 @@ from models import (
 )
 from core.downloader import DownloadAborted, Downloader, build_filename, sanitize_filename
 from core.metadata import write_tags
+from core.providers.base import MusicProvider
 from core.providers.netease import NeteaseProvider
 from core.providers import get_provider
 
@@ -95,6 +96,41 @@ def _find_delivered_song(sid: str, platform: str):
         sid, platform, song.file_path,
     )
     return None
+
+
+def should_block_downgrade(existing_song, actual_level: str) -> tuple[bool, str]:
+    """force 重下时判断是否应阻止降级覆盖已有文件。
+
+    规则（治理决策表）：
+    - 无已有 success 记录 / 已有记录文件已丢失 → 放行（文件丢失不比较）
+    - 已有 quality 或 actual_level 任一不在 QUALITY_ORDER（链外档位，
+      无法可靠比较）→ 放行
+    - actual_level 严格低于已有 quality（按 QUALITY_ORDER 序，index 小=档高）
+      → 阻止
+    - 升级 / 同级 → 放行
+
+    纯函数：DB 查询在调用侧（_download_with_account），本函数只依据
+    existing_song 对象与 actual_level 判定，便于单测（参照
+    _find_delivered_song 先例）。调用契约：existing_song 为按
+    status="success" 过滤的 Song 记录或 None。
+
+    Returns:
+        (是否阻止, 说明文案)；放行时文案为空串。
+    """
+    if existing_song is None:
+        return False, ""
+    if not _song_file_exists(existing_song):
+        return False, ""
+    order = MusicProvider.QUALITY_ORDER
+    old_level = existing_song.quality or ""
+    if old_level not in order or actual_level not in order:
+        return False, ""
+    if order.index(actual_level) > order.index(old_level):
+        return True, (
+            f"音质降级保护：磁盘已有 {old_level} 音质文件，"
+            f"本次实际档位 {actual_level} 较低，已阻止覆盖下载"
+        )
+    return False, ""
 
 
 def _month_start() -> datetime:
@@ -1525,6 +1561,37 @@ class TaskManager:
             self._mark_failed(task_pk, sid, sname, artists, pl_id, pl_name,
                               f"{reason}（已尝试 {len(tried)} 个账号）", account_id=account.id, platform=account.platform)
             return
+
+        # 音质降级防破坏保护（TASK-04a）：磁盘已有更高音质的 success 交付文件时，
+        # 阻止本次更低档位的流覆盖它——force 重下绕过了 _find_delivered_song 拦截，
+        # 同扩展名场景（hires/lossless 同为 .flac、128/320 同为 .mp3）目标文件
+        # 存在但大小不符会触发下载器"原子替换"，静默删掉旧的高音质文件。
+        # 位置在取流成功判定之后：取流失败时无覆盖风险，保留原有换号/失败语义；
+        # 非 force 路径走到这里必然"文件已丢失"（文件在盘的已被拦截），
+        # should_block_downgrade 对其天然放行，规则无需区分 force。
+        with self.app.app_context():
+            existing_song = Song.query.filter_by(
+                id=str(sid), platform=account.platform, status="success").first()
+            block, why = should_block_downgrade(existing_song, actual_level)
+            if block:
+                # 不下载、不写盘、不动 Song；任务终态 skipped（保护性跳过，
+                # 非失败，不走 _mark_failed）。skipped 不在 ACTIVE_TASK_STATUSES，
+                # 自动从活跃列表消失；历史 tab 经 _history_row 展示 why 文案
+                cur = DownloadTask.query.get(task_pk)
+                if cur is not None and cur.status == "paused":
+                    # 与 _mark_failed 同款守卫：暂停请求恰好落在判定与写库之间时
+                    # 以 paused 为准（paused 可继续，skipped 是终态）
+                    return
+                if cur is not None:
+                    cur.status = "skipped"
+                    cur.progress = 100
+                    cur.error_msg = why
+                    db.session.commit()
+                logger.info(
+                    "音质降级保护: %s - %s 磁盘已有 %s 文件，拒绝以 %s 覆盖（任务 pk=%s → skipped）",
+                    artists, sname, existing_song.quality, actual_level, task_pk,
+                )
+                return
 
         # 只有有 url 时才取扩展名和大小
         ext = url_info.get("ext", "mp3")

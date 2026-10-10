@@ -9,7 +9,7 @@
 - POST   /api/sync/<pid>          立即同步某歌单
 - POST   /api/sync-all            同步所有已启用歌单
 - GET    /api/songs               分页查询下载历史
-- DELETE /api/songs/<pk>          删除记录（?delete_file=1 删文件并级联删除所有关联记录）
+- DELETE /api/songs/<pk>          删除记录（?delete_file=1 同时删除该行记录指向的本地音乐文件）
 - POST   /api/songs/batch-delete  批量删除记录（{"pks":[...], "delete_file":bool}）
 - POST   /api/retry               重试失败歌曲（支持单首/全部，可带 platform 限定平台）
 - GET    /api/tasks               获取当前活跃任务进度
@@ -606,17 +606,28 @@ def delete_all_failed_songs():
     })
 
 
+def _same_file_path(a: str, b: str) -> bool:
+    """判断两个路径是否指向同一文件（归一化 ..、分隔符与软链接后比较）"""
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except (OSError, ValueError):
+        return a == b
+
+
 def _delete_song_record(pk: int, delete_file: bool) -> tuple[bool, str]:
     """删除单条下载记录的核心逻辑（单条删除与批量删除共用）
 
     Returns:
         (是否删除成功, 提示消息)。语义与 DELETE /api/songs/<pk> 完全一致：
-        - 仅删记录：删除该条 download_tasks 记录；若该歌曲 (song_id, platform)
-          没有其他 done 任务引用，则一并删除 songs 表记录，使重新下载不再被
-          "已下载"去重拦截；
-        - delete_file=True：先删本地文件，再级联删除同 (song_id, platform) 的
-          所有 download_tasks 记录（done/failed/skipped）及 songs 表记录；
-          文件删除失败则整体中断，数据库不动。
+        - 仅删记录（delete_file=False）：删除该条 download_tasks 记录；若该歌曲
+          (song_id, platform) 没有其他 done 任务引用，则一并删除 songs 表记录，
+          使重新下载不再被"已下载"去重拦截；
+        - delete_file=True（按行删除，v0.7.7.1 起一行一档）：删除该行快照
+          file_path 指向的本地文件（快照为空时回退 Song.file_path，兼容存量行），
+          只删除选中的这一行任务记录（不再级联删除同曲其他历史行）；Song 联动：
+          无剩余任务行则删 Song 行；被删文件正是 Song 当前指向的文件时，改指
+          剩余最新 done 行的非空快照（无可用快照则保持悬空，由文件丢失放行
+          重下机制兜底）；其余情况 Song 不动。文件删除失败不阻断记录删除。
         - 两种模式均要求该歌曲无未结束任务（pending/downloading/paused），
           避免与下载中的 worker 竞态（任务行/Song 行被删后 worker 状态更新落空）。
     """
@@ -643,29 +654,69 @@ def _delete_song_record(pk: int, delete_file: bool) -> tuple[bool, str]:
 
     if delete_file:
 
-        # 先删文件（失败则整体中断，数据库不动）
+        # 待删文件：优先取选中行的快照（v0.7.7.1 起一行一档，删的应是
+        # 这一行当时下载的文件）；存量行快照为空时回退 Song 指向的文件
+        # （旧版行为兼容，不回填不编造）
+        target_path = task.file_path or (song.file_path if song else "")
+
         file_msg = ""
-        if not song or not song.file_path:
+        if not target_path:
             file_msg = "（无关联音乐文件）"
         else:
-            ok, err = _delete_song_file(song.file_path)
+            ok, err = _delete_song_file(target_path)
             if err:
-                return False, f"删除音乐文件失败：{err}，记录未删除"
-            file_msg = "和音乐文件" if ok else "（音乐文件已不存在）"
+                # 白名单拦截 / 文件占用等：文件未删，记录照删——按行删除
+                # 只影响选中这一行，不像旧版级联那样会放大误删面
+                logger.warning("删除音乐文件未成功（记录照删）: pk=%s path=%s: %s",
+                               pk, target_path, err)
+                file_msg = f"（音乐文件未删除：{err}）"
+            else:
+                file_msg = "和音乐文件" if ok else "（音乐文件已不存在）"
 
-        # 级联删除：该歌曲在所有歌单的关联任务记录 + songs 表记录
+        # 只删除选中的这一行（不再级联删除同曲其他历史行）
         log_ctx = (task.artists, task.song_name, task.song_id, task.platform)
-        deleted_rows = DownloadTask.query.filter(
-            DownloadTask.song_id == task.song_id,
-            DownloadTask.platform == task.platform,
-        ).delete(synchronize_session=False)
+        db.session.delete(task)
+
+        # Song 联动：
+        # - 无剩余任务行：删 Song，使重新下载不被"已下载"去重拦截；
+        # - 有剩余行且被删文件正是 Song 当前指向：改指剩余最新 done 行的
+        #   非空快照（按 updated_at/created_at 取最新）；无可用快照则
+        #   Song.file_path 保持悬空，由文件丢失放行重下机制兜底；
+        # - 有剩余行但删的是旧档位文件：Song 不动。
         if song:
-            db.session.delete(song)
+            remaining = DownloadTask.query.filter(
+                DownloadTask.pk != pk,
+                DownloadTask.song_id == task.song_id,
+                DownloadTask.platform == task.platform,
+            ).all()
+            if not remaining:
+                db.session.delete(song)
+            elif (target_path and song.file_path
+                  and _same_file_path(target_path, song.file_path)):
+                latest_done = DownloadTask.query.filter(
+                    DownloadTask.pk != pk,
+                    DownloadTask.song_id == task.song_id,
+                    DownloadTask.platform == task.platform,
+                    DownloadTask.status == "done",
+                ).order_by(DownloadTask.updated_at.desc(),
+                           DownloadTask.created_at.desc(),
+                           DownloadTask.pk.desc()).all()
+                pick = next((t for t in latest_done if t.file_path), None)
+                if pick:
+                    song.file_path = pick.file_path
+                    song.file_size = pick.file_size or 0
+                    song.quality = pick.quality or ""
+                    logger.info("Song 改指剩余最新 done 行快照: song_id=%s platform=%s -> %s",
+                                task.song_id, task.platform, pick.file_path)
+                else:
+                    logger.info("剩余行无可用文件快照，Song.file_path 保持悬空"
+                                "(song_id=%s, platform=%s)，文件丢失放行重下机制会兜底",
+                                task.song_id, task.platform)
         db.session.commit()
 
-        logger.info("级联删除下载记录: pk=%s %s - %s (song_id=%s, platform=%s, 共%d条, 删文件=%s)",
-                    pk, *log_ctx, deleted_rows, delete_file)
-        return True, f"已删除 {deleted_rows} 条关联记录{file_msg}"
+        logger.info("删除下载记录(含文件): pk=%s %s - %s (song_id=%s, platform=%s, 文件=%s)",
+                    pk, *log_ctx, target_path or "-")
+        return True, f"已删除 1 条记录{file_msg}"
 
     # ---- 仅删除记录：单条删除 ----
 
@@ -699,7 +750,9 @@ def delete_song(pk: int):
     """删除下载记录（按 download_tasks.pk 删除）
 
     可选 query 参数：
-        delete_file=1  同时删除本地音乐文件，并级联删除该歌曲在所有歌单的关联记录
+        delete_file=1  同时删除该行记录快照指向的本地音乐文件（快照为空时
+                       回退 Song.file_path）；仅删除选中这一行，同曲其他
+                       历史行保留（Song 按 _delete_song_record 规则联动）
 
     行为说明见 _delete_song_record（单条/批量删除共用）。
     """
