@@ -47,6 +47,10 @@ class DownloadOutcome(NamedTuple):
     produced: True  = 本次调用真正写盘（传输完成后临时文件覆盖目标）
               False = 命中"目标已存在且大小相符"提前返回，未做任何写入
 
+    overwrote: 仅 produced=True 时有意义。True 表示本次替换了一个下载前
+        就已存在的文件（大小不符重下 / overwrite 模式）；False 表示目标
+        在本次调用前不存在。produced=False（跳过分支）时恒为 False。
+
     区分二者的原因：提前返回时 path 指向的是调用前就已存在于磁盘上的
     文件，并非本次任务的产物。调用方若要"删除任务时一并清理产物"，
     必须只在 produced=True 时删除，否则会误删用户既有文件。
@@ -54,6 +58,7 @@ class DownloadOutcome(NamedTuple):
 
     path: Path
     produced: bool
+    overwrote: bool = False
 
 
 _INVALID_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
@@ -80,12 +85,15 @@ def sanitize_filename(name: str, max_len: int = 80) -> str:
     return name or "未知"
 
 
-def _fit_path(path: Path, max_path_len: int = 240) -> Path:
+def _fit_path(path: Path, max_path_len: int = 240, protected_suffix: str = "") -> Path:
     """如果路径超过 Windows MAX_PATH 限制（260），自动截断文件名
 
     Args:
         path: 目标路径
         max_path_len: 最大允许路径长度（默认 240，留 20 字符安全余量）
+        protected_suffix: 截断保护后缀。非空且文件主名以其结尾时，截断只
+            削前部、保留该后缀（如唯一标识 "-12345"），避免截断把尾部
+            标识削掉后不同歌曲截成同名文件互相覆盖
 
     Returns:
         调整后的路径（如无超长则原样返回）
@@ -106,9 +114,25 @@ def _fit_path(path: Path, max_path_len: int = 240) -> Path:
         logger.warning("路径目录部分过长，无法截断文件名: %s", full)
         return path
 
+    # 截断保护：主名以 protected_suffix 结尾时剥离后缀，只截前部，
+    # 截完拼回；剥离后剩余预算不足时放弃截断（走下方"返回原路径"分支）
+    tail_len = 0
+    if protected_suffix and stem.endswith(protected_suffix):
+        tail_len = len(protected_suffix)
+
     if len(stem) > available:
         original = stem
-        stem = stem[:available].rstrip()
+        if tail_len:
+            budget = available - tail_len
+            if budget <= 10:
+                logger.warning(
+                    "路径目录部分过长，保护后缀 %r 占用后文件名预算不足，放弃截断: %s",
+                    protected_suffix, full,
+                )
+                return path
+            stem = stem[:budget].rstrip() + protected_suffix
+        else:
+            stem = stem[:available].rstrip()
         truncated = parent / (stem + suffix)
         logger.info("路径过长，截断文件名: %s -> %s", name, truncated.name)
         return truncated
@@ -185,7 +209,8 @@ class Downloader:
             raise box["err"]
         return box["resp"]
 
-    def target_path(self, sub_dir: str | None, filename: str) -> Path:
+    def target_path(self, sub_dir: str | None, filename: str,
+                    protected_suffix: str = "") -> Path:
         base = self.output_dir
         if sub_dir:
             # 支持多级子目录（dir_layout=artist_album 时为 "歌手/专辑"）：
@@ -195,8 +220,9 @@ class Downloader:
                     base = base / sanitize_filename(seg)
             base.mkdir(parents=True, exist_ok=True)
         path = base / filename
-        # 路径长度保护：自动截断过长的文件名
-        path = _fit_path(path)
+        # 路径长度保护：自动截断过长的文件名（protected_suffix 透传，
+        # 保证截断保留尾部标识）
+        path = _fit_path(path, protected_suffix=protected_suffix)
         return path
 
     def download(
@@ -207,6 +233,7 @@ class Downloader:
         expected_size: int | None = None,
         progress_callback=None,
         abort_check: AbortCheck | None = None,
+        protected_suffix: str = "",
     ) -> DownloadOutcome | None:
         """下载文件到指定子目录，支持断点续传
 
@@ -218,6 +245,8 @@ class Downloader:
             progress_callback: 可选的进度回调 callback(downloaded_bytes, total_bytes)
             abort_check: 可选的中止检查回调，返回 True 时立即抛出
                 DownloadAborted 并保留 .part（供断点续传）；默认 None = 不可中断
+            protected_suffix: 路径过长截断时的保护后缀，透传给 target_path()
+                与 .part 临时文件的截断，保证两者截断结果主名一致
 
         Returns:
             DownloadOutcome（path 为下载完成的文件路径，produced 表示是否本次写盘）；
@@ -228,21 +257,33 @@ class Downloader:
                 不是错误，调用方不得计入重试与失败统计。
         """
         try:
-            target = self.target_path(sub_dir, filename)
+            target = self.target_path(sub_dir, filename, protected_suffix=protected_suffix)
 
             if target.exists() and not self.overwrite:
-                if expected_size and abs(target.stat().st_size - expected_size) > 1024:
-                    logger.warning("文件已存在但大小不符，重新下载: %s", target.name)
+                if expected_size is not None:
+                    if abs(target.stat().st_size - expected_size) > 1024:
+                        logger.warning("文件已存在但大小不符，重新下载: %s", target.name)
+                    else:
+                        logger.info("跳过已存在: %s", target.relative_to(self.output_dir))
+                        # produced=False：该文件并非本次调用产出（可能早于本次任务存在）
+                        return DownloadOutcome(target, False)
+                elif target.stat().st_size <= 1024:
+                    # 无 expected_size 可校验：≤1024 字节的既有文件视为可疑
+                    # （0 字节空文件/残缺残留），与"大小不符"同理走重下
+                    logger.warning(
+                        "文件已存在但大小可疑（%d 字节，无 expected_size 可校验），"
+                        "重新下载: %s", target.stat().st_size, target.name,
+                    )
                 else:
                     logger.info("跳过已存在: %s", target.relative_to(self.output_dir))
-                    # produced=False：该文件并非本次调用产出（可能早于本次任务存在）
                     return DownloadOutcome(target, False)
 
             # 检查路径长度，防止临时文件路径溢出
             tmp = target.with_suffix(target.suffix + ".part")
             if len(str(tmp)) > 260:
                 logger.warning("临时文件路径过长(%d字符)，尝试截断: %s", len(str(tmp)), tmp)
-                tmp = _fit_path(tmp, max_path_len=250)
+                # 透传同一 protected_suffix：.part 截断后主名与 target 一致
+                tmp = _fit_path(tmp, max_path_len=250, protected_suffix=protected_suffix)
 
             resume_pos = tmp.stat().st_size if tmp.exists() else 0
         except OSError as e:
@@ -327,10 +368,13 @@ class Downloader:
                 if expected_size and actual > expected_size + 1024 * 1024:
                     raise IOError(f"文件大小超出预期: 期望 {expected_size}, 实际 {actual}")
 
+                # overwrote：落盘前目标已存在（本次替换了既有文件，
+                # 如大小不符重下 / overwrite 模式），供调用方审计
+                overwrote = target.exists()
                 tmp.replace(target)
                 logger.info("下载完成: %s", target.relative_to(self.output_dir))
                 # produced=True：本次调用真正完成了写盘
-                return DownloadOutcome(target, True)
+                return DownloadOutcome(target, True, overwrote)
 
             except DownloadAborted:
                 # 必须置于最前：否则会被下面的 except Exception 捕获 →

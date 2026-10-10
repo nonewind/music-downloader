@@ -62,6 +62,41 @@ _HOURLY_PAUSE_SECONDS = 1800
 _enqueue_lock = threading.Lock()
 
 
+def _song_file_exists(song) -> bool:
+    """success 记录对应的文件是否仍在磁盘上。
+
+    file_path 正常为绝对路径；空串/相对路径按历史数据兜底处理：
+    相对路径以 _ROOT 为基准。无路径记录视为文件不存在。
+    """
+    fp = (song.file_path or "").strip()
+    if not fp:
+        return False
+    p = Path(fp)
+    if not p.is_absolute():
+        p = _ROOT / p
+    return p.exists()
+
+
+def _find_delivered_song(sid: str, platform: str):
+    """返回"已成功且文件仍在磁盘"的 Song；无记录/文件丢失返回 None。
+
+    None = 允许入队重下：去重判断从"有 success 记录"升级为
+    "success 记录且文件仍在磁盘"，修复文件被手动清理/丢失后歌曲
+    被永久卡成"已下载"的问题。调用方须已在 Flask app context 内
+    （四处调用点均满足），本函数不再自开 context。
+    """
+    song = Song.query.filter_by(id=sid, platform=platform, status="success").first()
+    if song is None:
+        return None
+    if _song_file_exists(song):
+        return song
+    logger.info(
+        "歌曲 %s(%s) 有 success 记录但文件已不在磁盘（file_path=%r），允许重新下载",
+        sid, platform, song.file_path,
+    )
+    return None
+
+
 def _month_start() -> datetime:
     """本月 1 号 0 点（用于额度统计）"""
     now = datetime.now()
@@ -663,7 +698,7 @@ class TaskManager:
                 if not sid:
                     logger.warning("歌单 %s 存在无 id 曲目，已跳过: name=%r", pl_name, t.get("name"))
                     continue
-                existing = Song.query.filter_by(id=sid, platform=platform, status="success").first()
+                existing = _find_delivered_song(sid, platform)
                 if existing:
                     # 已下载：在当前歌单记录一条"已下载"任务（不重复下载）
                     already = DownloadTask.query.filter_by(
@@ -870,7 +905,7 @@ class TaskManager:
                     logger.info("搜索下载跳过(命中排除关键字): %s - %s", _tartists, _tname)
                     continue
                 # 过滤已下载成功
-                existing = Song.query.filter_by(id=sid, platform=platform, status="success").first()
+                existing = _find_delivered_song(sid, platform)
                 if existing:
                     skipped += 1
                     continue
@@ -961,7 +996,7 @@ class TaskManager:
                     excluded += 1
                     logger.info("专辑下载跳过(命中排除关键字): %s - %s", _tartists, _tname)
                     continue
-                existing = Song.query.filter_by(id=sid, platform=platform, status="success").first()
+                existing = _find_delivered_song(sid, platform)
                 if existing:
                     skipped += 1
                     continue
@@ -1037,10 +1072,10 @@ class TaskManager:
             platform = "netease"
         song_id = str(song_id)
         with self.app.app_context(), _enqueue_lock:
-            # force 重新下载仅跳过"已下载成功"拦截；下方活跃任务拦截
+            # force 重新下载仅跳过"已下载且文件仍在磁盘"拦截；下方活跃任务拦截
             # 对 force 同样生效（避免同一首歌并发下载两次）
             if not force:
-                existing = Song.query.filter_by(id=song_id, platform=platform, status="success").first()
+                existing = _find_delivered_song(song_id, platform)
                 if existing:
                     return False
             pending = DownloadTask.query.filter(
@@ -1564,6 +1599,10 @@ class TaskManager:
             sub_dir = primary_artist
             filename = build_filename(artists, sname, ext, album_name if include_album else "")
 
+        # 路径超长截断保护：artist_album 文件名尾部即「-歌曲ID」，截断时保留
+        # 该后缀避免同名曲混淆；artist 布局文件名不含 ID，无需保护
+        protected_suffix = f"-{sanitize_filename(str(sid))}" if dir_layout == "artist_album" else ""
+
         last = {"pct": -1, "ts": 0.0}
 
         def progress_cb(downloaded: int, total: int | None) -> None:
@@ -1590,6 +1629,7 @@ class TaskManager:
                 expected_size=size,
                 progress_callback=progress_cb,
                 abort_check=abort_check,
+                protected_suffix=protected_suffix,
             )
         except DownloadAborted as e:
             # 用户暂停/删除：正常控制流。不改任务状态、不计失败，
