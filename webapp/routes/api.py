@@ -492,6 +492,37 @@ def sync_all():
 # ======================================================================
 # 下载历史
 # ======================================================================
+def _history_row(task, song) -> dict:
+    """组装 /api/songs 的一行响应（字段名与历史版本一致，前端零改动）。
+
+    "从 Song 借来的历史属性"（quality/file_path/file_size）改为任务行
+    下载时刻快照优先：任务行快照列为空（存量行/失败/跳过）时回退 JOIN 的
+    Song，保持升级前行为；两者皆无则为空串/0，不编造。
+    """
+    display_status = "success" if task.status == "done" else task.status
+    # 获取平台信息：优先从 task 获取，其次从 song 获取，最后默认为 netease
+    platform = task.platform or (song.platform if song else "netease") or "netease"
+    return {
+        "id": task.song_id,
+        "pk": task.pk,
+        "platform": platform,
+        "platform_name": PLATFORM_NAMES.get(platform, platform),
+        "name": task.song_name,
+        "artists": task.artists,
+        "album": song.album if song else "",
+        "duration_ms": song.duration_ms if song else 0,
+        "quality": task.quality or (song.quality if song else ""),
+        "file_path": task.file_path or (song.file_path if song else ""),
+        "file_size": task.file_size or (song.file_size if song else 0),
+        "playlist_id": task.playlist_id,
+        "playlist_name": task.playlist_name,
+        "downloaded_at": task.updated_at.strftime("%Y-%m-%d %H:%M:%S") if task.updated_at else None,
+        "status": display_status,
+        "error_msg": task.error_msg,
+        "account_id": task.account_id,
+    }
+
+
 @api_bp.route("/songs")
 def get_songs():
     """分页查询下载历史
@@ -544,29 +575,7 @@ def get_songs():
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     data = []
     for task, song in pagination.items:
-        # 状态映射回前端：done → success
-        display_status = "success" if task.status == "done" else task.status
-        # 获取平台信息：优先从 task 获取，其次从 song 获取，最后默认为 netease
-        platform = task.platform or (song.platform if song else "netease") or "netease"
-        data.append({
-            "id": task.song_id,
-            "pk": task.pk,
-            "platform": platform,
-            "platform_name": PLATFORM_NAMES.get(platform, platform),
-            "name": task.song_name,
-            "artists": task.artists,
-            "album": song.album if song else "",
-            "duration_ms": song.duration_ms if song else 0,
-            "quality": song.quality if song else "",
-            "file_path": song.file_path if song else "",
-            "file_size": song.file_size if song else 0,
-            "playlist_id": task.playlist_id,
-            "playlist_name": task.playlist_name,
-            "downloaded_at": task.updated_at.strftime("%Y-%m-%d %H:%M:%S") if task.updated_at else None,
-            "status": display_status,
-            "error_msg": task.error_msg,
-            "account_id": task.account_id,
-        })
+        data.append(_history_row(task, song))
 
     return jsonify({
         "code": 0,

@@ -1729,6 +1729,15 @@ class TaskManager:
                 task.status = "done"
                 task.progress = 100
                 task.account_id = account.id
+                # 下载时刻音质/文件快照：/api/songs 以任务行为准回放本次
+                # 下载的 quality/file_path/file_size，避免同一首歌重下覆盖
+                # 唯一 Song 记录后，N 条历史行全显示最新音质。与 Song 构造处
+                # 同款写法；同时覆盖"真实写盘"与"命中已存在文件（produced=
+                # False）"两条路径——跳过路径反映本次确认的文件。失败路径
+                # （_mark_failed）与歌单同步 skipped 行不写，quality 留空默认值
+                task.quality = actual_level
+                task.file_path = str(path)
+                task.file_size = path.stat().st_size if path.exists() else 0
                 # 同步权威歌名（下载历史显示；歌单任务原名可能是合并串）
                 if task.song_name != sname:
                     task.song_name = sname

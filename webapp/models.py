@@ -174,6 +174,12 @@ class DownloadTask(db.Model):
     error_msg = db.Column(db.String(500), default="")
     account_id = db.Column(db.Integer, nullable=True)      # 本次下载用的账号
     fee = db.Column(db.Integer, default=0)                 # 歌曲费用类型，用于 VIP/非VIP 账号选择
+    # 下载时刻的音质/文件快照（与 Song 同名字段同类型）：/api/songs 读取时
+    # 优先用快照，空值回退 JOIN 的 Song（存量行兼容）。没有快照列时，同一首
+    # 歌重新下载会覆盖唯一一条 Song，导致 N 条历史行全显示最新音质
+    quality = db.Column(db.String(20), default="", nullable=False)
+    file_path = db.Column(db.String(500), default="", nullable=False)
+    file_size = db.Column(db.Integer, default=0, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -192,6 +198,9 @@ class DownloadTask(db.Model):
             "error_msg": self.error_msg,
             "account_id": self.account_id,
             "fee": self.fee,
+            "quality": self.quality,
+            "file_path": self.file_path,
+            "file_size": self.file_size,
             "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
         }
 
@@ -471,6 +480,9 @@ def _migrate_song_ids_to_text(engine) -> None:
                     error_msg VARCHAR(500),
                     account_id INTEGER,
                     fee INTEGER,
+                    quality VARCHAR(20) DEFAULT '' NOT NULL,
+                    file_path VARCHAR(500) DEFAULT '' NOT NULL,
+                    file_size INTEGER DEFAULT 0 NOT NULL,
                     created_at DATETIME,
                     updated_at DATETIME,
                     PRIMARY KEY (pk)
@@ -480,10 +492,11 @@ def _migrate_song_ids_to_text(engine) -> None:
                 INSERT INTO download_tasks_new
                     (pk, platform, song_id, song_name, artists, playlist_id,
                      playlist_name, status, progress, error_msg, account_id, fee,
-                     created_at, updated_at)
+                     quality, file_path, file_size, created_at, updated_at)
                 SELECT pk, platform, CAST(song_id AS TEXT), song_name, artists,
                        playlist_id, playlist_name, status, progress, error_msg,
-                       account_id, fee, created_at, updated_at
+                       account_id, fee, quality, file_path, file_size,
+                       created_at, updated_at
                 FROM download_tasks
             """))
             conn.execute(text("DROP TABLE download_tasks"))
@@ -590,6 +603,17 @@ def init_db(app, db_path: str = "downloads.db") -> None:
         if inspector.has_table("playlists") and not _column_exists(inspector, "playlists", "platform"):
             with db.engine.begin() as conn:
                 conn.execute(text("ALTER TABLE playlists ADD COLUMN platform VARCHAR(20) DEFAULT 'netease' NOT NULL"))
+        # 兼容迁移：给旧 download_tasks 表补充下载时刻音质/文件快照三列
+        # （存量行补默认空值，读取侧空值回退 JOIN 的 Song，不回填不编造）
+        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "quality"):
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN quality VARCHAR(20) DEFAULT '' NOT NULL"))
+        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "file_path"):
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN file_path VARCHAR(500) DEFAULT '' NOT NULL"))
+        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "file_size"):
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN file_size INTEGER DEFAULT 0 NOT NULL"))
         # 兼容迁移：songs.id / download_tasks.song_id Integer → VARCHAR(64)
         # （QQ songmid 字符串化，须在上述补列迁移之后执行）
         _migrate_song_ids_to_text(db.engine)
