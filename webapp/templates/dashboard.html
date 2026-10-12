@@ -1,82 +1,203 @@
 {% extends "base.html" %}
+{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{% import "macros/ui.html" as ui %}
 {% block title %}总览 - Deen音乐下载器{% endblock %}
 {% block content %}
-<h4 class="mb-4"><i class="bi bi-speedometer2"></i> 总览</h4>
+<style>
+    /* 总览页局部样式（dash- 前缀，页面自治；ui- 组件层不改动） */
+    .dash-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    .dash-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
+    .dash-mb { margin-bottom: 14px; }
 
-<!-- 统计卡片 -->
-<div class="row g-3 mb-4" id="stats-cards">
-    <div class="col-md-3">
-        <div class="card text-white bg-primary">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-music-note-list"></i> 已下载总数</h6>
-                <h2 id="stat-total">-</h2>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-success">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-check-circle"></i> 下载成功</h6>
-                <h2 id="stat-success">-</h2>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-danger">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-x-circle"></i> 下载失败</h6>
-                <h2 id="stat-failed">-</h2>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-info">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-calendar-day"></i> 今日新增</h6>
-                <h2 id="stat-today">-</h2>
-            </div>
-        </div>
-    </div>
-</div>
+    /* 顶部紧凑统计条：数字+标签横排（非彩色大卡片） */
+    .dash-statbar { display: flex; align-items: stretch; flex-wrap: wrap; }
+    .dash-stat {
+        flex: 1 1 0;
+        min-width: 110px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 14px 20px;
+    }
+    .dash-stat + .dash-stat { border-left: 1px solid var(--ui-border); }
+    .dash-stat-num { font-size: 24px; font-weight: 700; line-height: 1.2; color: var(--ui-text); font-variant-numeric: tabular-nums; }
+    .dash-stat-num.dash-num-success { color: var(--ui-success); }
+    .dash-stat-num.dash-num-danger { color: var(--ui-danger); }
+    .dash-stat-sub { font-size: 14px; font-weight: 500; color: var(--ui-text-3); }
+    .dash-stat-label { font-size: 12px; color: var(--ui-text-2); }
+    @media (max-width: 575.98px) {
+        .dash-stat { flex-basis: 50%; min-width: 0; padding: 10px 14px; }
+        /* 小屏两列排布时去掉整行左边框（保留列间分隔线） */
+        .dash-stat + .dash-stat { border-left: 0; }
+        .dash-stat:nth-child(even) { border-left: 1px solid var(--ui-border); }
+        .dash-stat:nth-child(n+3) { border-top: 1px solid var(--ui-border); }
+    }
 
-<!-- 歌单统计 + 账号状态 -->
-<div class="row g-3 mb-4">
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-body">
-                <h6 class="card-title"><i class="bi bi-list-music"></i> 关注歌单</h6>
-                <p class="mb-0">已启用 <strong id="stat-active-playlists">-</strong> / 共 <strong id="stat-total-playlists">-</strong> 个</p>
+    /* 主体左右两栏（小屏折叠单列） */
+    .dash-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+    @media (max-width: 767.98px) {
+        .dash-grid { grid-template-columns: 1fr; }
+    }
+    .dash-cardhead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
+    .dash-cardhead i { color: var(--ui-text-3); font-size: 16px; }
+    .dash-cardhead .ui-badge { margin-left: auto; font-weight: 400; }
+
+    /* 账号状态紧凑列表：每平台一行（平台徽章 + 昵称 + VIP + 月额度微进度条） */
+    .dash-accrow { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+    .dash-accrow + .dash-accrow { border-top: 1px solid var(--ui-border); }
+    .dash-accmain { flex: 1; min-width: 0; }
+    .dash-accline1 { display: flex; align-items: center; gap: 8px; }
+    .dash-accname { font-size: 13px; font-weight: 600; color: var(--ui-text); min-width: 0; }
+    .dash-accline2 { display: flex; align-items: center; gap: 10px; margin-top: 5px; }
+    .dash-quota { font-size: 12px; color: var(--ui-text-2); white-space: nowrap; flex-shrink: 0; }
+    .dash-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--ui-border); overflow: hidden; }
+    .dash-bar-fill { display: block; height: 100%; border-radius: 2px; transition: width .3s, background-color .3s; }
+
+    /* 快速操作 */
+    .dash-actions { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    .dash-actions-desc { font-size: 12px; color: var(--ui-text-2); }
+    .dash-shortcuts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .dash-shortcut {
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        padding: 12px 6px;
+        border: 1px solid var(--ui-border); border-radius: var(--ui-r-s);
+        background: var(--ui-surface); color: var(--ui-text-2);
+        font-size: 12px; text-decoration: none;
+        transition: background-color .15s, border-color .15s, color .15s;
+    }
+    .dash-shortcut i { font-size: 18px; color: var(--ui-text-3); transition: color .15s; }
+    .dash-shortcut:hover { background: var(--ui-bg); border-color: var(--ui-primary); color: var(--ui-text); }
+    .dash-shortcut:hover i { color: var(--ui-primary); }
+    .dash-guide {
+        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        padding: 10px 12px; margin-bottom: 4px;
+        border: 1px solid rgba(59, 130, 246, .35); background: rgba(59, 130, 246, .07);
+        border-radius: var(--ui-r-s); font-size: 12px; color: var(--ui-text);
+    }
+    .dash-guide .ui-btn { margin-left: auto; }
+</style>
+
+<div x-data="dashboardPage()" x-cloak>
+    <!-- 页头 -->
+    <div class="dash-pagehead">
+        <h4><i class="bi bi-speedometer2"></i> 总览</h4>
+    </div>
+
+    <!-- 顶部紧凑统计条：总下载 / 成功 / 失败 / 今日 + 关注歌单（下载任务实时状态见底部状态栏） -->
+    <div class="ui-card dash-mb">
+        <div class="dash-statbar">
+            <div class="dash-stat">
+                <span class="dash-stat-num" x-text="statsLoaded ? (stats.total ?? '-') : '-'">-</span>
+                <span class="dash-stat-label">总下载</span>
+            </div>
+            <div class="dash-stat">
+                <span class="dash-stat-num dash-num-success" x-text="statsLoaded ? (stats.success ?? '-') : '-'">-</span>
+                <span class="dash-stat-label">下载成功</span>
+            </div>
+            <div class="dash-stat">
+                <span class="dash-stat-num dash-num-danger" x-text="statsLoaded ? (stats.failed ?? '-') : '-'">-</span>
+                <span class="dash-stat-label">下载失败</span>
+            </div>
+            <div class="dash-stat">
+                <span class="dash-stat-num" x-text="statsLoaded ? (stats.today ?? '-') : '-'">-</span>
+                <span class="dash-stat-label">今日新增</span>
+            </div>
+            <div class="dash-stat">
+                <span class="dash-stat-num">
+                    <span x-text="statsLoaded ? (stats.active_playlists ?? '-') : '-'">-</span>
+                    <span class="dash-stat-sub" x-text="'/ ' + (statsLoaded ? (stats.total_playlists ?? '-') : '-')"></span>
+                </span>
+                <span class="dash-stat-label">关注歌单（启用 / 全部）</span>
             </div>
         </div>
     </div>
-    <div class="col-md-6">
-        <div class="card">
-            <div class="card-body d-flex justify-content-between align-items-center">
-                <div>
-                    <h6 class="card-title"><i class="bi bi-arrow-repeat"></i> 快速操作</h6>
-                    <p class="mb-0 text-muted">同步所有已启用的歌单</p>
+
+    <!-- 主体两栏：左「账号状态」紧凑列表，右「快速操作」 -->
+    <div class="dash-grid">
+
+        <!-- 左：账号状态（本月已下载） -->
+        <div class="ui-card">
+            <div class="dash-cardhead">
+                <i class="bi bi-people"></i> 账号状态
+                <span class="ui-badge ui-badge-muted" x-show="accounts.length" x-text="'本月 ' + accounts.length + ' 个启用账号'"></span>
+            </div>
+
+            <!-- 空态：无账号 → 引导去账号管理页 -->
+            <div x-show="accountsLoaded && !accounts.length">
+                {% set acct_empty_action %}
+                <a class="ui-btn ui-btn-primary" href="{{ url_for('views.accounts') }}">
+                    <i class="bi bi-person-gear"></i> 去账号管理添加
+                </a>
+                {% endset %}
+                {{ ui.empty('person-gear', '暂无启用账号，添加后可在此查看月额度用量', acct_empty_action) }}
+            </div>
+
+            <!-- 紧凑列表：每平台一行 -->
+            <div x-show="accounts.length">
+                <template x-for="a in accounts" :key="a.id">
+                    <div class="dash-accrow">
+                        <span class="ui-badge" :class="'ui-badge-plat-' + a.platform" x-text="a.platform_name"></span>
+                        <div class="dash-accmain">
+                            <div class="dash-accline1">
+                                <span class="dash-accname ui-truncate" x-text="a.name" :title="a.name"></span>
+                                <span class="ui-badge" :class="a.vip_type > 0 ? 'ui-badge-warning' : 'ui-badge-muted'"
+                                      x-text="a.vip_text"></span>
+                            </div>
+                            <div class="dash-accline2">
+                                <span class="dash-quota" x-text="quotaText(a)"></span>
+                                <!-- 不限额不显示进度条 -->
+                                <span class="dash-bar" x-show="!a.unlimited">
+                                    <span class="dash-bar-fill" :style="barStyle(a)"></span>
+                                </span>
+                            </div>
+                            <div class="dash-accline2" style="margin-top: 2px;">
+                                <span class="ui-text-3" style="font-size: 12px" x-text="a.nickname || '未获取昵称'"></span>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- 右：快速操作 -->
+        <div class="ui-card">
+            <div class="dash-cardhead"><i class="bi bi-arrow-repeat"></i> 快速操作</div>
+            <div class="dash-actions">
+                <!-- 空库引导：无关注歌单 → 去发现页添加 -->
+                <div class="dash-guide" x-show="statsLoaded && stats.total_playlists === 0">
+                    <i class="bi bi-info-circle" style="color: var(--ui-info)"></i>
+                    <span>还没有关注的歌单</span>
+                    <a class="ui-btn ui-btn-sm ui-btn-primary" href="{{ url_for('views.discover') }}">
+                        <i class="bi bi-compass"></i> 去发现页添加
+                    </a>
                 </div>
-                <button class="btn btn-primary" id="btn-sync-all">
-                    <i class="bi bi-cloud-arrow-down"></i> 立即同步
-                </button>
+
+                <div>
+                    {{ ui.btn('立即同步全部', 'primary', icon='cloud-arrow-down',
+                              attrs={'@click': 'syncAll()', ':disabled': 'syncing',
+                                     ':class': "{ 'is-loading': syncing }"}) }}
+                    <div class="dash-actions-desc" style="margin-top: 6px;">拉取所有已启用歌单的新歌并加入下载队列</div>
+                </div>
+
+                <div class="dash-shortcuts">
+                    <a class="dash-shortcut" href="{{ url_for('views.discover') }}">
+                        <i class="bi bi-compass"></i><span>发现</span>
+                    </a>
+                    <a class="dash-shortcut" href="{{ url_for('views.history') }}">
+                        <i class="bi bi-download"></i><span>下载</span>
+                    </a>
+                    {% if current_user and current_user.is_admin %}
+                    <a class="dash-shortcut" href="{{ url_for('views.organize') }}">
+                        <i class="bi bi-collection"></i><span>音乐整理</span>
+                    </a>
+                    {% endif %}
+                </div>
             </div>
         </div>
     </div>
-</div>
 
-<!-- 账号状态卡片 -->
-<div class="card mb-4">
-    <div class="card-header">
-        <i class="bi bi-people"></i> 账号状态（本月已下载）
-    </div>
-    <div class="card-body">
-        <div class="row g-3" id="accounts-stats">
-            <div class="col-12 text-center text-muted">加载中...</div>
-        </div>
-    </div>
+    <!-- 当前任务实时状态已由全局底部状态栏承载，不再单设「正在下载」区 -->
 </div>
-
-<!-- 当前任务已移至「下载」页 -->
 {% endblock %}
 
 {% block scripts %}

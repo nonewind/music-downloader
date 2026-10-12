@@ -1,87 +1,108 @@
-// 总览页逻辑
+// 总览页（Frontend 2.0 重写，UI-03e）：Alpine 单一状态入口 dashboardPage()
+//
+// 布局：顶部紧凑统计条（总下载/成功/失败/今日 + 关注歌单，数字+标签横排）
+// + 主体两栏（左「账号状态」每平台一行的紧凑列表，右「快速操作」卡）。
+// 下载任务的实时状态由全局底部状态栏（app.js）承载，本页不再单设任务区。
+//
+// 依赖全局工具（app.js 先于本脚本加载）：api()、showToast()。
+// 渲染全部由 Alpine 模板绑定（x-for/x-text/:class/:style），本文件零 innerHTML。
+//
+// 功能与旧版逐项对齐：
+//   GET  /api/stats          统计（30s 轮询，document.hidden 跳过）
+//   GET  /api/accounts/stats 账号月额度（30s 轮询，document.hidden 跳过；
+//                            VIP 徽章 / 月额度进度条 ≥80% 黄 ≥100% 红 / 不限额不显示进度条）
+//   POST /api/sync-all       立即同步全部（按钮 busy 态）
+// 轮询 timer 组件内统一管理：init() 启动、destroy() 清理（页面整页跳转
+// 无需，SPA 式复用时防 timer 泄漏）。
 
-// 加载统计数据
-async function loadStats() {
-    try {
-        const data = await api("/api/stats");
-        const s = data.data;
-        document.getElementById("stat-total").textContent = s.total;
-        document.getElementById("stat-success").textContent = s.success;
-        document.getElementById("stat-failed").textContent = s.failed;
-        document.getElementById("stat-today").textContent = s.today;
-        document.getElementById("stat-active-playlists").textContent = s.active_playlists;
-        document.getElementById("stat-total-playlists").textContent = s.total_playlists;
-    } catch (e) {
-        console.error("加载统计失败:", e);
-    }
-}
+function dashboardPage() {
+    return {
+        // ---- 唯一状态入口 ----
+        stats: {
+            total: null, success: null, failed: null, today: null,
+            active_playlists: null, total_playlists: null,
+        },
+        statsLoaded: false,
+        accounts: [],          // GET /api/accounts/stats（仅启用账号）
+        accountsLoaded: false,
+        syncing: false,        // 立即同步全部 busy 态
+        _pollTimer: null,      // 统计 + 账号月额度共用轮询（同为 30s）
 
-// 同步全部
-document.getElementById("btn-sync-all").addEventListener("click", async function() {
-    const btn = this;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="loading-spinner"></span> 同步中...';
-    try {
-        const data = await api("/api/sync-all", { method: "POST" });
-        showToast(data.msg, "同步结果");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<i class="bi bi-cloud-arrow-down"></i> 立即同步';
-    }
-});
+        // ============================================================
+        // 初始化 / 销毁
+        // ============================================================
+        async init() {
+            await Promise.all([this.loadStats(), this.loadAccountsStats()]);
+            // 30s 轮询（页面在后台时不发无谓请求，切回前台下一轮自动恢复）
+            this._pollTimer = setInterval(() => {
+                if (document.hidden) return;
+                this.loadStats();
+                this.loadAccountsStats();
+            }, 30000);
+        },
+        destroy() {
+            if (this._pollTimer) {
+                clearInterval(this._pollTimer);
+                this._pollTimer = null;
+            }
+        },
 
-// 加载账号状态
-async function loadAccountsStats() {
-    try {
-        const data = await api("/api/accounts/stats");
-        const list = data.data || [];
-        const container = document.getElementById("accounts-stats");
-        if (list.length === 0) {
-            container.innerHTML = '<div class="col-12 text-center text-muted">暂无启用账号，请到「账号管理」添加</div>';
-            return;
-        }
-        container.innerHTML = list.map(a => {
-            const quotaText = a.unlimited
+        // ============================================================
+        // 数据加载
+        // ============================================================
+        async loadStats() {
+            try {
+                const data = await api("/api/stats");
+                this.stats = data.data || this.stats;
+                this.statsLoaded = true;
+            } catch (e) {
+                console.error("加载统计失败:", e);
+            }
+        },
+
+        async loadAccountsStats() {
+            try {
+                const data = await api("/api/accounts/stats");
+                this.accounts = data.data || [];
+                this.accountsLoaded = true;
+            } catch (e) {
+                console.error("加载账号状态失败:", e);
+            }
+        },
+
+        // ============================================================
+        // 操作
+        // ============================================================
+        async syncAll() {
+            if (this.syncing) return;
+            this.syncing = true;
+            try {
+                const data = await api("/api/sync-all", { method: "POST" });
+                showToast(data.msg, "同步结果", "success");
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.syncing = false;
+            }
+        },
+
+        // ============================================================
+        // 月额度展示（进度条 ≥80% 黄 ≥100% 红；不限额不显示进度条）
+        // ============================================================
+        quotaText(a) {
+            return a.unlimited
                 ? `${a.monthly_downloaded} 首（不限）`
                 : `${a.monthly_downloaded} / ${a.quota_limit} 首`;
-            const pct = a.unlimited ? 0 : (a.quota_limit > 0 ? Math.min(100, a.monthly_downloaded * 100 / a.quota_limit) : 0);
-            const barColor = a.unlimited ? "bg-success" : (pct >= 100 ? "bg-danger" : (pct >= 80 ? "bg-warning" : "bg-success"));
-            return `
-                <div class="col-md-4 col-sm-6">
-                    <div class="card border-light">
-                        <div class="card-body p-3">
-                            <div class="d-flex justify-content-between align-items-center mb-1">
-                                <strong>${escapeHtml(a.name)}</strong>
-                                <span class="badge ${a.vip_type > 0 ? 'bg-warning' : 'bg-secondary'}">${escapeHtml(a.vip_text)}</span>
-                            </div>
-                            <small class="text-muted d-block mb-2">${escapeHtml(a.nickname || '未获取昵称')}</small>
-                            <div class="d-flex justify-content-between mb-1">
-                                <small>本月已下载</small>
-                                <small class="fw-bold">${quotaText}</small>
-                            </div>
-                            ${a.unlimited ? '' : `<div class="progress" style="height:6px"><div class="progress-bar ${barColor}" style="width:${pct}%"></div></div>`}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join("");
-    } catch (e) {
-        console.error("加载账号状态失败:", e);
-    }
+        },
+        quotaPct(a) {
+            if (a.unlimited) return 0;
+            return a.quota_limit > 0 ? Math.min(100, a.monthly_downloaded * 100 / a.quota_limit) : 0;
+        },
+        barStyle(a) {
+            const pct = this.quotaPct(a);
+            const color = pct >= 100 ? "var(--ui-danger)"
+                : (pct >= 80 ? "var(--ui-warning)" : "var(--ui-success)");
+            return `width:${pct}%;background:${color}`;
+        },
+    };
 }
-
-// 初始化
-loadStats();
-loadAccountsStats();
-
-// 每 30 秒刷新统计和账号状态（页面在后台时不发无谓请求）
-setInterval(() => {
-    if (document.hidden) return;
-    loadStats();
-}, 30000);
-setInterval(() => {
-    if (document.hidden) return;
-    loadAccountsStats();
-}, 30000);

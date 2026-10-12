@@ -43,7 +43,7 @@ def count_pending(app) -> int:
 
         if Setting.get("dir_layout", "artist_album") != "artist_album":
             return 0
-        output_dir = _resolve_output(Setting)
+        output_dir = _resolve_output(Setting.get)
         count = 0
         for s in Song.query.filter(Song.status == "success", Song.file_path != "").all():
             dest = _dest_dir_for(s, output_dir, sanitize_filename)

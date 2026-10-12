@@ -6,98 +6,150 @@
     <title>登录 - Deen音乐下载器</title>
     <link href="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css') }}" rel="stylesheet">
+    {# Frontend 2.0：独立页引入全局 tokens，ui-card/ui-input/ui-btn 体系可用（CSS 同走 static_v 缓存戳） #}
+    <link href="{{ static_v('css/app.css') }}" rel="stylesheet">
     <style>
+        /* 页内样式（auth- 前缀）：加载于 app.css 之后，body 全局底色按页覆盖为
+           Frontend 2.0 浅色调，其余复用 ui- 体系，不破坏全局规则 */
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(160deg, #eef4ff 0%, var(--ui-bg) 45%, #f2f6ff 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
+            color: var(--ui-text);
         }
-        .login-card {
-            width: 380px;
+        .auth-card {
+            width: 400px;
             max-width: 90vw;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            border: none;
-            border-radius: 12px;
+            box-shadow: var(--ui-shadow-2);
         }
-        .login-header {
+        .auth-header {
             text-align: center;
-            padding: 24px 16px 8px;
+            padding: 28px 16px 6px;
         }
-        .login-header i {
-            font-size: 48px;
-            color: #667eea;
+        .auth-header i {
+            font-size: 44px;
+            color: var(--ui-primary);
         }
-        .login-header h4 {
+        .auth-header h4 {
             margin: 12px 0 4px;
-            color: #333;
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--ui-text);
         }
-        .login-header small {
-            color: #999;
+        .auth-header small {
+            color: var(--ui-text-3);
         }
-        .form-control:focus {
-            border-color: #667eea;
-            box-shadow: 0 0 0 0.2rem rgba(102,126,234,0.2);
+        .auth-body {
+            padding: 18px 24px 24px;
         }
-        .btn-primary {
-            background-color: #667eea;
-            border-color: #667eea;
+        .auth-alert {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 10px 12px;
+            margin-bottom: 14px;
+            border: 1px solid rgba(239, 68, 68, .45);
+            background: rgba(239, 68, 68, .08);
+            border-radius: var(--ui-r-s);
+            font-size: 13px;
+            color: var(--ui-text);
         }
-        .btn-primary:hover {
-            background-color: #5568d3;
-            border-color: #5568d3;
+        .auth-alert i {
+            flex-shrink: 0;
+            margin-top: 1px;
+            color: var(--ui-danger);
+        }
+        .auth-alert-warning {
+            border-color: rgba(245, 158, 11, .45);
+            background: rgba(245, 158, 11, .08);
+        }
+        .auth-alert-warning i { color: var(--ui-warning); }
+        .auth-field { margin-bottom: 14px; }
+        .auth-label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--ui-text);
+        }
+        .auth-input { width: 100%; }
+        .auth-card .input-group-text {
+            background: var(--ui-bg);
+            border-color: var(--ui-border);
+            color: var(--ui-text-2);
+            font-size: 13px;
+        }
+        .auth-toggle { height: 34px; }
+        .auth-submit {
+            width: 100%;
+            height: 38px;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+        .auth-divider {
+            border: 0;
+            border-top: 1px solid var(--ui-border);
+            margin: 16px 0 12px;
+        }
+        .auth-hint {
+            text-align: center;
+            font-size: 12px;
+            color: var(--ui-text-3);
         }
     </style>
 </head>
 <body>
-    <div class="card login-card">
-        <div class="login-header">
+    <div class="ui-card auth-card">
+        <div class="auth-header">
             <i class="bi bi-music-note-beamed"></i>
             <h4>Deen音乐下载器</h4>
             <small>v{{ version }}</small>
         </div>
-        <div class="card-body p-4">
+        <div class="auth-body">
+            {# 服务端错误（含限速提示「失败次数过多，请 10 分钟后再试」） #}
             {% if error %}
-            <div class="alert alert-danger py-2" role="alert">
+            <div class="auth-alert" role="alert">
                 <i class="bi bi-exclamation-triangle"></i> {{ error }}
             </div>
             {% endif %}
+            {# 纯服务端表单 POST，不经 JS 提交 #}
             <form method="POST" action="{{ url_for('views.login') }}">
-                <div class="mb-3">
-                    <label class="form-label">用户名</label>
+                <div class="auth-field">
+                    <label class="auth-label" for="login-username">用户名</label>
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-person"></i></span>
-                        <input type="text" class="form-control" name="username" autofocus required
+                        <input type="text" id="login-username" class="ui-input auth-input" name="username" autofocus required
                                placeholder="请输入用户名" value="{{ request.form.username }}">
                     </div>
                 </div>
-                <div class="mb-4">
-                    <label class="form-label">密码</label>
+                <div class="auth-field">
+                    <label class="auth-label" for="login-password">密码</label>
                     <div class="input-group">
                         <span class="input-group-text"><i class="bi bi-lock"></i></span>
-                        <input type="password" class="form-control" name="password" required
+                        <input type="password" id="login-password" class="ui-input auth-input" name="password" required
                                placeholder="请输入密码">
-                        <button class="btn btn-outline-secondary" type="button" id="toggle-pwd" tabindex="-1">
+                        <button class="ui-btn ui-btn-secondary auth-toggle" type="button" id="toggle-pwd" tabindex="-1"
+                                aria-label="显示或隐藏密码">
                             <i class="bi bi-eye"></i>
                         </button>
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary w-100 py-2">
+                <button type="submit" class="ui-btn ui-btn-primary auth-submit">
                     <i class="bi bi-box-arrow-in-right"></i> 登录
                 </button>
             </form>
-            <hr class="my-3">
-            <div class="text-center text-muted small">
+            <hr class="auth-divider">
+            <div class="auth-hint">
                 <i class="bi bi-info-circle"></i>
                 初始账号：admin / admin123
             </div>
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.bundle.min.js') }}"></script>
+    {# 密码显隐切换（页内最小交互，无其他 JS 依赖） #}
     <script>
-        // 密码显示/隐藏切换
         document.getElementById("toggle-pwd").addEventListener("click", function() {
             const pwd = document.querySelector("input[name='password']");
             const icon = this.querySelector("i");
