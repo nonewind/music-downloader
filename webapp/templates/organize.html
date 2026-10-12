@@ -1,48 +1,224 @@
 {% extends "base.html" %}
+{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{% import "macros/ui.html" as ui %}
 {% block title %}音乐整理 - Deen音乐下载器{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0"><i class="bi bi-collection"></i> 音乐整理</h4>
-    <div class="d-flex gap-2 align-items-center">
-        <span class="badge bg-secondary" id="organize-mode-badge" title="删除模式在「设置」中调整">模式加载中...</span>
-        <button class="btn btn-primary" id="btn-scan">
-            <i class="bi bi-search"></i> 扫描下载目录
-        </button>
-    </div>
-</div>
+<style>
+    /* 音乐整理页局部样式（org- 前缀，页面自治；ui- 组件层不做改动） */
+    .org-pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    .org-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; font-size: 18px; font-weight: 600; color: var(--ui-text); }
+    .org-desc { margin: 0; font-size: 13px; color: var(--ui-text-2); }
+    .org-scanbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
+    .org-summary { font-size: 13px; color: var(--ui-text-2); }
+    .org-summary b { color: var(--ui-text); font-weight: 600; }
+    .org-actionbar { position: sticky; top: calc(var(--topbar-h) + 8px); z-index: 900; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
+    .org-sel-text { flex: 1 1 auto; min-width: 180px; font-size: 13px; color: var(--ui-text-2); }
+    .org-sel-text b { color: var(--ui-text); font-weight: 600; }
+    .org-group { margin-bottom: 12px; overflow: hidden; }
+    .org-group-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; cursor: pointer; user-select: none; }
+    .org-group-head:hover { background: var(--ui-bg); }
+    .org-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .org-count { font-size: 12px; color: var(--ui-text-3); white-space: nowrap; }
+    .org-arrow { flex-shrink: 0; font-size: 12px; color: var(--ui-text-3); transition: transform .15s ease; }
+    .org-arrow-open { transform: rotate(180deg); }
+    .org-group-body { border-top: 1px solid var(--ui-border); }
+    .org-row { display: grid; grid-template-columns: 28px auto minmax(0, 1fr) 150px 78px 52px 92px; align-items: center; gap: 10px; min-height: 32px; padding: 2px 14px 2px 10px; font-size: 13px; color: var(--ui-text); cursor: pointer; transition: background-color .12s; }
+    .org-row:hover { background: #f0f4fa; }
+    .org-row-selected { box-shadow: inset 3px 0 0 var(--ui-primary); background: rgba(59, 130, 246, .05); }
+    .org-row-selected:hover { background: rgba(59, 130, 246, .08); }
+    .org-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .org-meta { font-size: 12px; color: var(--ui-text-2); text-align: right; white-space: nowrap; }
+    .org-rec { justify-self: start; }
+    .org-rec-ghost { visibility: hidden; }  /* 占位不显示，保住行内列对齐 */
+    .org-empty-success i { color: var(--ui-success); opacity: .9; }
+    .org-result-head { display: flex; align-items: center; gap: 8px; padding: 12px var(--ui-sp-5); border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
+    .org-result-head .ui-btn { margin-left: auto; }
+    .org-result-sec { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--ui-text); }
+    .org-fail-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; }
+    .org-fail-row, .org-repair-row { font-size: 12px; color: var(--ui-text-2); }
+    .org-fail-row { color: #b91c1c; }
+    .org-result-hint { margin-top: 8px; font-size: 12px; color: #b45309; }
+    .org-filelist { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin: 10px 0 0; padding: 8px 10px; background: var(--ui-bg); border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
+    .org-filelist-row { font-size: 12px; color: var(--ui-text-2); }
+    .org-note { margin: 10px 0 0; font-size: 12px; color: var(--ui-text-3); }
+    @media (max-width: 767.98px) {
+        .org-row { display: flex; flex-wrap: wrap; row-gap: 2px; min-height: 0; padding: 6px 14px 6px 10px; }
+        .org-name { flex: 1 1 auto; min-width: 55%; }
+        .org-spec { order: 8; flex-basis: 100%; text-align: left; padding-left: 38px; }  /* 规格列折行 */
+    }
+</style>
 
-<div class="alert alert-info">
-    <i class="bi bi-info-circle"></i>
-    扫描下载目录，识别重复文件与同歌曲多音质版本；每组选择要保留的文件后安全清理其余文件。
-    <span class="d-block small text-muted mt-1" id="mode-hint">正在读取删除模式...</span>
-</div>
-
-<!-- 扫描摘要（扫描后显示） -->
-<div class="alert alert-secondary d-none" id="scan-summary"></div>
-
-<!-- 分组卡片列表 -->
-<div id="group-list"></div>
-<p class="text-muted text-center" id="empty-hint">尚未扫描，点击右上角「扫描下载目录」开始。</p>
-
-<!-- 底部操作条（有分组时显示） -->
-<div class="card mt-3 d-none" id="clean-bar">
-    <div class="card-body d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <span class="text-muted" id="clean-count">待清理 0 个文件</span>
-        <div class="d-flex gap-2">
-            <button class="btn btn-warning" id="btn-clean-recommended" title="每组保留推荐文件（规格最高）">
-                <i class="bi bi-stars"></i> 按推荐清理
-            </button>
-            <button class="btn btn-danger" id="btn-clean-selected" title="每组保留当前勾选项">
-                <i class="bi bi-trash"></i> 按当前选择清理
-            </button>
+<div x-data="organizePage()" x-cloak>
+    <!-- 1. 页头：标题 + 说明 + 删除模式徽章 -->
+    <div class="org-pagehead">
+        <div>
+            <h4><i class="bi bi-collection"></i> 音乐整理</h4>
+            <p class="org-desc">扫描下载目录，识别重复文件与多音质版本，勾选后安全清理其余文件。</p>
         </div>
+        <span class="ui-badge" x-show="directDelete !== null"
+              :class="directDelete ? 'ui-badge-warning' : 'ui-badge-success'"
+              :title="directDelete ? '清理的文件将被永久删除，不会进入回收站' : '清理的文件移入下载目录下 .trash，可手动恢复'"
+              x-text="directDelete ? '永久删除模式' : '回收站模式'"></span>
     </div>
-</div>
 
-<!-- 清理结果区（清理后显示） -->
-<div class="card mt-3 d-none" id="clean-result">
-    <div class="card-header"><i class="bi bi-clipboard-check"></i> 清理结果</div>
-    <div class="card-body" id="clean-result-body"></div>
+    <!-- 2. 扫描条 + 扫描摘要 -->
+    <div class="org-scanbar">
+        {# 加载态按钮需动态内容（spinner+文案切换），ui.btn 宏的 label 是静态
+           文本节点、x-text 会整体替换按钮内容，故此类按钮手写 ui-btn 结构 #}
+        <button type="button" class="ui-btn ui-btn-primary"
+                :class="{ 'is-loading': scanning }"
+                :disabled="scanning" @click="scan()">
+            <span class="ui-spinner" x-show="scanning"></span>
+            <i class="bi bi-search" x-show="!scanning"></i>
+            <span x-text="scanning ? '扫描中…' : '扫描下载目录'"></span>
+        </button>
+        <span class="org-summary" x-show="scannedOnce && !scanning">
+            共 <b class="ui-mono" x-text="scanned"></b> 个音频 ·
+            <b class="ui-mono" x-text="groups.length"></b> 组重复 ·
+            耗时 <b class="ui-mono" x-text="duration ?? '--'"></b> 秒
+        </span>
+    </div>
+
+    <!-- 3. 未扫描空态 -->
+    <div x-show="!scannedOnce && !scanning">
+        {{ ui.empty('collection', '扫描下载目录以识别重复文件与多音质版本') }}
+    </div>
+
+    <!-- 4. 无重复空态（成功色图标） -->
+    <div class="org-empty-success" x-show="scannedOnce && !scanning && !groups.length">
+        {{ ui.empty('check2-circle', '未发现重复文件') }}
+    </div>
+
+    <!-- 清理结果卡（清理后显示，三段空段不显示） -->
+    <template x-if="result">
+        <div class="ui-card org-result">
+            <div class="org-result-head">
+                <i class="bi bi-clipboard-check"></i> 清理结果
+                {{ ui.btn('重新扫描', 'secondary', size='sm', icon='arrow-clockwise', attrs={'@click': 'rescan()'}) }}
+            </div>
+            <div class="ui-card-body">
+                <div class="org-result-sec" x-show="result.deleted.length">
+                    <span class="ui-badge ui-badge-success">已清理</span>
+                    <span><b class="ui-mono" x-text="result.deleted.length"></b> 个文件</span>
+                </div>
+                <template x-if="result.failed.length">
+                    <div>
+                        <div class="org-result-sec">
+                            <span class="ui-badge ui-badge-danger">失败</span>
+                            <span><b class="ui-mono" x-text="result.failed.length"></b> 个文件</span>
+                        </div>
+                        <div class="org-fail-list">
+                            <template x-for="f in result.failed" :key="f.path">
+                                <div class="org-fail-row">
+                                    <span class="ui-mono" x-text="f.path"></span> — <span x-text="f.reason"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+                <template x-if="result.repaired.length">
+                    <div>
+                        <div class="org-result-sec">
+                            <span class="ui-badge ui-badge-info">记录修复</span>
+                            <span><b class="ui-mono" x-text="result.repaired.length"></b> 条</span>
+                        </div>
+                        <div class="org-fail-list">
+                            <template x-for="r in result.repaired" :key="r.song + r.to">
+                                <div class="org-repair-row">
+                                    <span x-text="r.song"></span>：<span class="ui-mono" x-text="r.from"></span>
+                                    → <span class="ui-mono" x-text="r.to"></span>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+                <div class="org-result-hint" x-show="result.failed.length">部分文件清理失败，建议重新扫描核对最新状态。</div>
+            </div>
+        </div>
+    </template>
+
+    <!-- 5. 操作条（sticky，有分组时显示） -->
+    <div class="org-actionbar" x-show="groups.length">
+        <span class="org-sel-text">
+            已选 <b class="ui-mono" x-text="selectedCount"></b> 个文件 ·
+            涉及 <b class="ui-mono" x-text="selectedSongs"></b> 首歌 ·
+            预计释放 <b class="ui-mono" x-text="fmtSizeBytes(freedBytes)"></b>
+        </span>
+        {{ ui.btn('按推荐选择', 'secondary', size='sm', icon='stars', attrs={'@click': 'applyRecommended()'}) }}
+        {{ ui.btn('清空选择', 'secondary', size='sm', icon='x-circle', attrs={'@click': 'clearSelection()'}) }}
+        <button type="button" class="ui-btn ui-btn-danger"
+                :class="{ 'is-loading': cleaning }"
+                :disabled="selectedCount === 0 || cleaning"
+                x-text="cleaning ? '清理中…' : '清理所选文件'"
+                @click="openCleanModal()"></button>
+    </div>
+
+    <!-- 6. 分组列表 -->
+    <template x-for="g in groups" :key="g.recommended">
+        <div class="ui-card org-group">
+            <!-- 组头：全选快捷 + 类型徽章 + 标题 + 文件数 + 已选徽章 + 折叠箭头 -->
+            <div class="org-group-head" @click="g.open = !g.open"
+                 :title="g.open ? '点击折叠' : '点击展开'">
+                <span class="ui-check" @click.stop>
+                    <input type="checkbox" :checked="isGroupAllChecked(g)" @change="toggleGroup(g)"
+                           x-effect="$el.indeterminate = groupCheckedCount(g) > 0 && !isGroupAllChecked(g)"
+                           :aria-label="'全选组：' + songLabel(g)">
+                </span>
+                <span class="ui-badge" :class="g.group_type === 'same_id' ? 'ui-badge-info' : 'ui-badge-warning'"
+                      x-text="g.group_type === 'same_id' ? '同歌曲多版本' : '完全重复'"></span>
+                <span class="org-group-title" x-text="songLabel(g)" :title="songLabel(g)"></span>
+                <span class="org-count"><span class="ui-mono" x-text="g.files.length"></span> 个文件</span>
+                <span class="ui-badge ui-badge-success" x-show="groupCheckedCount(g) > 0"
+                      x-text="'已选 ' + groupCheckedCount(g)"></span>
+                <i class="bi bi-chevron-down org-arrow" :class="g.open ? 'org-arrow-open' : ''"></i>
+            </div>
+            <!-- 组内文件行（紧凑 32px；勾选行左侧主色细条） -->
+            <div class="org-group-body" x-show="g.open" x-transition.opacity.duration.150ms>
+                <template x-for="it in g.files" :key="it.path">
+                    <label class="org-row" :class="g.checked.has(it.path) ? 'org-row-selected' : ''">
+                        <span class="ui-check org-check">
+                            <input type="checkbox" :checked="g.checked.has(it.path)"
+                                   @change="toggleFile(g, it, $event.target.checked)"
+                                   :aria-label="'选择：' + it.filename">
+                        </span>
+                        {# 推荐标记：visibility 幽灵占位——每行是独立 grid 容器，
+                           display:none 会让同行后续单元格左移一列导致错位 #}
+                        <span class="ui-badge ui-badge-success org-rec"
+                              :class="it.path === g.recommended ? '' : 'org-rec-ghost'">推荐保留</span>
+                        <span class="org-name" x-text="it.filename" :title="it.path"></span>
+                        <span class="org-meta org-spec ui-mono" x-text="formatSpec(it)"></span>
+                        <span class="org-meta org-size ui-mono" x-text="fmtSizeBytes(it.size)"></span>
+                        <span class="org-meta org-dur ui-mono" x-text="fmtDurationMs(it.duration_ms)"></span>
+                        <span class="org-meta org-mtime ui-mono" x-text="fmtDate(it.mtime)"></span>
+                    </label>
+                </template>
+            </div>
+        </div>
+    </template>
+
+    {# 清理确认 Modal（Alpine store 'modals' 控制显隐；动态文本全走 x-text 免转义） #}
+    {% set clean_body %}
+    <p x-text="directDelete
+        ? '当前为永久删除模式：所选文件将被直接删除，不可恢复。'
+        : '当前为回收站模式：所选文件将移入下载目录下 .trash，可手动恢复。'"></p>
+    <p>将处理 <b class="ui-mono" x-text="selectedCount"></b> 个文件 ·
+       预计释放 <b class="ui-mono" x-text="fmtSizeBytes(freedBytes)"></b></p>
+    <div class="org-filelist">
+        <template x-for="it in selectedItems" :key="it.path">
+            <div class="org-filelist-row ui-mono ui-truncate" x-text="it.path" :title="it.path"></div>
+        </template>
+    </div>
+    <p class="org-note">歌曲当前指向若被清理，将自动改指组内保留文件；组内全部清理时需重新下载。</p>
+    {% endset %}
+    {% set clean_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.clean = false'}) }}
+    <button type="button" class="ui-btn ui-btn-danger"
+            :class="{ 'is-loading': cleaning }"
+            :disabled="cleaning || selectedCount === 0"
+            x-text="cleaning ? '清理中…' : '确认清理'"
+            @click="confirmClean()"></button>
+    {% endset %}
+    {{ ui.modal('clean', '确认清理所选文件', clean_body, clean_footer) }}
 </div>
 {% endblock %}
 

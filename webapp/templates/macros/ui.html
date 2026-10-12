@@ -1,0 +1,112 @@
+{#
+  Frontend 2.0 UI 宏库（UI-02 最小集）
+
+  用法：页面模板顶部自行 `{% import "macros/ui.html" as ui %}`
+  （Jinja 的 import 作用域是模块级的：base.html 里的 import 对
+  子模板的 block 不可见，因此每个用宏的页面要自己引一次）。
+
+  Alpine 模态框模式：本库约定一个全局 Alpine store `modals`，
+  由 app.js 在 alpine:init 时注册（Alpine.store('modals', {})）。
+  页面内任意元素可 `$store.modals.<id> = true` 开、`= false` 关；
+  多个 modal 各占一个 key，互不干扰。
+#}
+
+{# 按钮：kind = primary|secondary|ghost|danger；size = 'sm'|None #}
+{% macro btn(label, kind='primary', size=None, icon=None, id=None, type='button', attrs={}) -%}
+<button type="{{ type }}"{% if id %} id="{{ id }}"{% endif %}
+    class="ui-btn ui-btn-{{ kind }}{% if size == 'sm' %} ui-btn-sm{% endif %}"
+    {%- for k, v in attrs.items() %} {{ k }}="{{ v }}"{% endfor %}>
+    {%- if icon %}<i class="bi bi-{{ icon }}"></i>{% endif -%}
+    {{ label }}
+</button>
+{%- endmacro %}
+
+{# 徽章：kind = muted|success|warning|danger|info #}
+{% macro badge(label, kind='muted') -%}
+<span class="ui-badge ui-badge-{{ kind }}">{{ label }}</span>
+{%- endmacro %}
+
+{#
+  模态框：Alpine 控制显隐（$store.modals.{{ id }}）。
+  body_html / footer_html 传 Markup 安全串（调用方自负转义责任），
+  同一页面可放置多个不同 id 的 modal，互不干扰。
+#}
+{% macro modal(id, title, body_html='', footer_html='') -%}
+<div class="ui-modal-mask" id="{{ id }}-mask" x-cloak
+     x-show="$store.modals.{{ id }}"
+     @keydown.escape.window="$store.modals.{{ id }} = false"
+     @click.self="$store.modals.{{ id }} = false"
+     style="display: none">
+    <div class="ui-modal" role="dialog" aria-modal="true" aria-labelledby="{{ id }}-title">
+        <div class="ui-modal-header">
+            <h3 id="{{ id }}-title">{{ title }}</h3>
+            <button type="button" class="ui-modal-close" aria-label="关闭"
+                    @click="$store.modals.{{ id }} = false">&times;</button>
+        </div>
+        <div class="ui-modal-body">{{ body_html|safe }}</div>
+        {% if footer_html %}<div class="ui-modal-footer">{{ footer_html|safe }}</div>{% endif %}
+    </div>
+</div>
+{%- endmacro %}
+
+{# 空状态：icon 为 bootstrap-icons 图标名，action_html 可选（如按钮） #}
+{% macro empty(icon='inbox', text='暂无数据', action_html=None) -%}
+<div class="ui-empty">
+    <i class="bi bi-{{ icon }}"></i>
+    <div class="ui-empty-text">{{ text }}</div>
+    {% if action_html %}{{ action_html|safe }}{% endif %}
+</div>
+{%- endmacro %}
+
+{#
+  分页：渲染窗口页码 + 前后省略号 + prev/next（与 history.js 分页同型）。
+  onclick 传页面函数名（如 'loadSongs'），宏输出 `onclick="{{ onclick }}(N);return false;"`。
+#}
+{% macro pagination(page, pages, onclick) -%}
+{% set pages = pages|int if pages else 1 %}
+{% set page = page|int if page else 1 %}
+<ul class="ui-pagination">
+    {# prev #}
+    {% if page <= 1 %}
+    <li class="disabled"><span class="ui-page-btn">&laquo;</span></li>
+    {% else %}
+    <li><a class="ui-page-btn" href="#" onclick="{{ onclick }}({{ page - 1 }});return false;">&laquo;</a></li>
+    {% endif %}
+    {# 首页 #}
+    {% if pages > 1 %}
+    {% if page == 1 %}
+    <li class="active"><span class="ui-page-btn">1</span></li>
+    {% else %}
+    <li><a class="ui-page-btn" href="#" onclick="{{ onclick }}(1);return false;">1</a></li>
+    {% endif %}
+    {% endif %}
+    {# 前省略号 #}
+    {% if page - 3 > 2 %}<li class="disabled"><span class="ui-page-btn ui-page-gap">&hellip;</span></li>{% endif %}
+    {# 当前页前后各 2 页（夹在首页与末页之间） #}
+    {% for p in range([2, page - 2]|max, [pages - 1, page + 2]|min + 1) %}
+    {% if p > 1 and p < pages %}
+    {% if p == page %}
+    <li class="active"><span class="ui-page-btn">{{ p }}</span></li>
+    {% else %}
+    <li><a class="ui-page-btn" href="#" onclick="{{ onclick }}({{ p }});return false;">{{ p }}</a></li>
+    {% endif %}
+    {% endif %}
+    {% endfor %}
+    {# 后省略号 #}
+    {% if page + 3 < pages - 1 %}<li class="disabled"><span class="ui-page-btn ui-page-gap">&hellip;</span></li>{% endif %}
+    {# 末页 #}
+    {% if pages > 1 %}
+    {% if page >= pages %}
+    <li class="active"><span class="ui-page-btn">{{ pages }}</span></li>
+    {% else %}
+    <li><a class="ui-page-btn" href="#" onclick="{{ onclick }}({{ pages }});return false;">{{ pages }}</a></li>
+    {% endif %}
+    {% endif %}
+    {# next #}
+    {% if page >= pages %}
+    <li class="disabled"><span class="ui-page-btn">&raquo;</span></li>
+    {% else %}
+    <li><a class="ui-page-btn" href="#" onclick="{{ onclick }}({{ page + 1 }});return false;">&raquo;</a></li>
+    {% endif %}
+</ul>
+{%- endmacro %}

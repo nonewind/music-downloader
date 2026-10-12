@@ -1,12 +1,61 @@
 // 全局工具函数
 
-// 显示 toast 提示
-function showToast(msg, title = "提示") {
+// 显示 toast 提示（Frontend 2.0：ui-toast 结构，右上角，3 秒自动消失）
+// 签名兼容旧调用 (msg, title)；kind 可选 'info'|'success'|'warning'|'error'
+function showToast(msg, title = "提示", kind = "info") {
+    const wrap = document.getElementById("global-toast");
+    // 容器不是新版 ui-toast-wrap 时走旧 bootstrap toast 兜底（防御性，
+    // 当前所有页面均经 base.html 提供新容器）
+    if (!wrap || !wrap.classList.contains("ui-toast-wrap")) {
+        _showToastLegacy(msg, title);
+        return;
+    }
+    const el = document.createElement("div");
+    el.className = "ui-toast" + (kind !== "info" ? " ui-toast-" + kind : "");
+    el.setAttribute("role", "status");
+
+    const body = document.createElement("div");
+    body.className = "ui-toast-body";
+    const t = document.createElement("span");
+    t.className = "ui-toast-title";
+    t.textContent = title;
+    body.appendChild(t);
+    body.appendChild(document.createTextNode(String(msg)));
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "ui-toast-close";
+    close.setAttribute("aria-label", "关闭");
+    close.innerHTML = "&times;";
+
+    el.appendChild(body);
+    el.appendChild(close);
+    wrap.appendChild(el);
+
+    let closed = false;
+    const dismiss = () => {
+        if (closed) return;
+        closed = true;
+        el.classList.remove("ui-toast-show");
+        setTimeout(() => el.remove(), 220);  // 等入场同款过渡播完再移除
+    };
+    close.addEventListener("click", dismiss);
+    // 双 rAF 确保初始样式已提交，入场过渡才能触发
+    requestAnimationFrame(() =>
+        requestAnimationFrame(() => el.classList.add("ui-toast-show"))
+    );
+    setTimeout(dismiss, 3000);
+}
+
+// 旧版 bootstrap toast 兜底路径（结构依赖 #toast-title/#toast-body）
+function _showToastLegacy(msg, title) {
     const toastEl = document.getElementById("global-toast");
-    document.getElementById("toast-title").textContent = title;
-    document.getElementById("toast-body").textContent = msg;
-    const toast = bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 3000 });
-    toast.show();
+    const titleEl = document.getElementById("toast-title");
+    const bodyEl = document.getElementById("toast-body");
+    if (!toastEl || !titleEl || !bodyEl || typeof bootstrap === "undefined") return;
+    titleEl.textContent = title;
+    bodyEl.textContent = msg;
+    bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 3000 }).show();
 }
 
 // API 请求封装（默认 15 秒超时，401 自动跳转登录；options.timeout 可覆盖）
@@ -149,14 +198,15 @@ function statusBadge(status) {
     return map[status] || '<span class="badge bg-secondary">' + status + '</span>';
 }
 
-// 更新同步指示器
+// 更新同步指示器（Frontend 2.0：改用 ui-badge 徽章类，与全站视觉统一；
+// sync-active 闪烁动画类保留，底栏摘要等其余逻辑不变）
 function updateSyncIndicator(active) {
     const el = document.getElementById("sync-indicator");
     if (!el) return;
     if (active) {
-        el.innerHTML = '<span class="badge bg-success sync-active">下载中...</span>';
+        el.innerHTML = '<span class="ui-badge ui-badge-success sync-active">下载中...</span>';
     } else {
-        el.innerHTML = '<span class="badge bg-secondary">空闲</span>';
+        el.innerHTML = '<span class="ui-badge ui-badge-muted">空闲</span>';
     }
 }
 
@@ -277,3 +327,192 @@ if (document.readyState === "loading") {
 } else {
     startGlobalStatusPolling();
 }
+
+// ============================================================
+// Frontend 2.0 组件层（UI-02）
+// ============================================================
+// 本段只增不改不删：上方既有函数被未迁移页面依赖，保留至迁移完成。
+// 新函数自本包起是新页面的唯一标准（format 家族以 fmt* 为准）。
+
+// ---- Alpine 全局 store：模态框开关（macros/ui.html 的 ui.modal 约定）----
+// 用法：页面 Alpine 表达式内 `$store.modals.<id> = true/false`，
+// 页面 JS 内 `Alpine.store('modals').<id> = true/false`。
+// 多个 modal 各占一个 store key，互不干扰。
+document.addEventListener("alpine:init", () => {
+    if (window.Alpine && !Alpine.store("modals")) {
+        Alpine.store("modals", {});
+    }
+});
+
+// ---- 确认框 ----
+// window.uiConfirm({title, message, confirmText, cancelText, danger}) -> Promise<boolean>
+// 动态构建 ui-modal DOM（原生实现，不依赖 Alpine）；ESC / 遮罩点击 / 关闭 /
+// 取消 = false，确认 = true。不替换任何现有 confirm() 调用（由后续迁移包统一改）。
+window.uiConfirm = function(opts = {}) {
+    const {
+        title = "确认操作",
+        message = "",
+        confirmText = "确定",
+        cancelText = "取消",
+        danger = false,
+    } = opts;
+    return new Promise((resolve) => {
+        let done = false;
+
+        const mask = document.createElement("div");
+        mask.className = "ui-modal-mask";
+        mask.style.display = "flex";
+
+        const modal = document.createElement("div");
+        modal.className = "ui-modal";
+        modal.setAttribute("role", "dialog");
+        modal.setAttribute("aria-modal", "true");
+
+        const header = document.createElement("div");
+        header.className = "ui-modal-header";
+        const h = document.createElement("h3");
+        h.textContent = title;
+        const closeBtn = document.createElement("button");
+        closeBtn.type = "button";
+        closeBtn.className = "ui-modal-close";
+        closeBtn.setAttribute("aria-label", "关闭");
+        closeBtn.innerHTML = "&times;";
+        header.appendChild(h);
+        header.appendChild(closeBtn);
+
+        const body = document.createElement("div");
+        body.className = "ui-modal-body";
+        body.textContent = message;
+
+        const footer = document.createElement("div");
+        footer.className = "ui-modal-footer";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "ui-btn ui-btn-secondary";
+        cancel.textContent = cancelText;
+        const ok = document.createElement("button");
+        ok.type = "button";
+        ok.className = "ui-btn " + (danger ? "ui-btn-danger" : "ui-btn-primary");
+        ok.textContent = confirmText;
+        footer.appendChild(cancel);
+        footer.appendChild(ok);
+
+        modal.appendChild(header);
+        modal.appendChild(body);
+        modal.appendChild(footer);
+        mask.appendChild(modal);
+        document.body.appendChild(mask);
+
+        const finish = (result) => {
+            if (done) return;
+            done = true;
+            document.removeEventListener("keydown", onKey);
+            mask.remove();
+            resolve(result);
+        };
+        const onKey = (e) => {
+            if (e.key === "Escape") finish(false);
+        };
+
+        document.addEventListener("keydown", onKey);
+        mask.addEventListener("click", (e) => {
+            if (e.target === mask) finish(false);  // 仅遮罩本体，点击弹窗内部不算
+        });
+        closeBtn.addEventListener("click", () => finish(false));
+        cancel.addEventListener("click", () => finish(false));
+        ok.addEventListener("click", () => finish(true));
+        ok.focus();
+    });
+};
+
+// ---- 按钮加载态 ----
+// window.withButtonLoading(btn, asyncFn)：备份按钮 HTML → 换 spinner+禁用 →
+// await asyncFn → 恢复（finally，异常也恢复）。返回 asyncFn 的返回值。
+window.withButtonLoading = async function(btn, asyncFn) {
+    if (!btn) return asyncFn();
+    const original = btn.innerHTML;
+    btn.classList.add("is-loading");
+    btn.disabled = true;
+    btn.innerHTML = '<span class="ui-spinner"></span>';
+    try {
+        return await asyncFn();
+    } finally {
+        btn.classList.remove("is-loading");
+        btn.disabled = false;
+        btn.innerHTML = original;
+    }
+};
+
+// ---- 统一 format 家族（新页面唯一标准；旧 formatSize/formatDuration 保留不动）----
+
+// 时长（毫秒）→ 补零 mm:ss；满 1 小时进位为 h:mm:ss；无效输入返回 "--"
+function fmtDurationMs(ms) {
+    if (ms === null || ms === undefined || isNaN(ms) || ms < 0) return "--";
+    let s = Math.floor(ms / 1000);
+    const h = Math.floor(s / 3600);
+    s -= h * 3600;
+    const m = Math.floor(s / 60);
+    s -= m * 60;
+    const two = (n) => String(n).padStart(2, "0");
+    return h > 0 ? h + ":" + two(m) + ":" + two(s) : two(m) + ":" + two(s);
+}
+
+// 字节数 → 智能单位（B/KB/MB/GB）；无效输入返回 "--"
+function fmtSizeBytes(n) {
+    if (n === null || n === undefined || isNaN(n) || n < 0) return "--";
+    if (n < 1024) return n + " B";
+    const kb = n / 1024;
+    const mb = kb / 1024;
+    const gb = mb / 1024;
+    if (gb >= 1) return gb.toFixed(2) + " GB";
+    if (mb >= 1) return mb.toFixed(1) + " MB";
+    return kb.toFixed(1) + " KB";
+}
+
+// 日期输入自动判别：Date 对象 / epoch 毫秒或秒（含纯数字字符串）/ ISO 字符串
+// → Date 或 null（无法解析）
+function _fmtParseDate(v) {
+    if (v === null || v === undefined || v === "") return null;
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+    if (typeof v === "number") {
+        // 13 位量级视为毫秒，10 位量级视为秒
+        const d = new Date(v < 1e12 ? v * 1000 : v);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    if (typeof v === "string") {
+        const s = v.trim();
+        if (/^\d+$/.test(s)) {
+            const num = Number(s);
+            const d = new Date(num < 1e12 ? num * 1000 : num);
+            return isNaN(d.getTime()) ? null : d;
+        }
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? null : d;
+    }
+    return null;
+}
+
+// → YYYY-MM-DD
+function fmtDate(v) {
+    const d = _fmtParseDate(v);
+    if (!d) return "--";
+    const two = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate());
+}
+
+// → YYYY-MM-DD HH:mm:ss
+function fmtDateTime(v) {
+    const d = _fmtParseDate(v);
+    if (!d) return "--";
+    const two = (n) => String(n).padStart(2, "0");
+    return fmtDate(d) + " " + two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
+}
+
+// ---- 平台元信息（单一来源）----
+// 名称与后端 AVAILABLE_PLATFORMS/PLATFORM_NAMES 一致；color 指向 Design
+// Token 平台色。后续页面逐步把散落的平台名/色值切换到此处。
+window.PLATFORM_META = {
+    netease: { name: "网易云", color: "var(--ui-plat-netease)" },
+    qq:      { name: "QQ音乐", color: "var(--ui-plat-qq)" },
+    kugou:   { name: "酷狗音乐", color: "var(--ui-plat-kugou)" },
+};

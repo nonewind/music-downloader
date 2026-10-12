@@ -6,19 +6,23 @@
     <title>{% block title %}Deen音乐下载器{% endblock %}</title>
     <link href="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css') }}" rel="stylesheet">
-    <link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet">
+    {# Frontend 2.0：CSS 也走 static_v 缓存戳（与 JS 一致，改样式即失效缓存） #}
+    <link href="{{ static_v('css/app.css') }}" rel="stylesheet">
     <script>
         // 网关根前缀（统一网关模式下为 /app/deen-music-downloader，普通模式为空串）。
         // app.js 的 api() 用它拼接所有相对请求；模板内链接统一用 url_for，无需该变量。
         window.APP_BASE = {{ request.script_root | tojson }};
     </script>
+    {# Frontend 2.0 UI 宏（base 自身可见；子模板 block 内使用需在页面顶部自行 import —— Jinja import 作用域为模块级） #}
+    {% import "macros/ui.html" as ui %}
 </head>
 <body>
+    <!-- 侧边栏：小屏 offcanvas 抽屉（Bootstrap offcanvas-lg 机制不变），大屏常驻 -->
     <aside class="offcanvas-lg offcanvas-start app-sidebar" id="appSidebar" tabindex="-1" aria-label="主导航">
         <a href="{{ url_for('views.dashboard') }}" class="sidebar-brand">
             <i class="bi bi-music-note-beamed"></i>
             <span>Deen音乐下载器</span>
-            <small class="text-white-50">v{{ version }}</small>
+            <small>v{{ version }}</small>
             <button type="button" class="btn-close btn-close-white d-lg-none ms-auto" data-bs-dismiss="offcanvas" aria-label="关闭菜单"></button>
         </a>
         <nav class="sidebar-nav">
@@ -61,30 +65,33 @@
                 <span class="crumb-sep d-none">/</span><span class="crumb-sub d-none" id="crumbSub"></span>
             </nav>
             <div class="topbar-right">
-                <span class="navbar-text me-3" id="sync-indicator">
-                    <span class="badge bg-secondary">加载中...</span>
+                <span class="topbar-sync me-3" id="sync-indicator">
+                    <span class="ui-badge ui-badge-muted">加载中...</span>
                 </span>
                 {% if current_user %}
-                <ul class="navbar-nav">
-                    <li class="nav-item dropdown">
-                        <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">
-                            <i class="bi bi-person-circle"></i>
-                            {{ current_user.username }}
-                            {% if current_user.is_admin %}<span class="badge bg-warning ms-1">管理员</span>{% endif %}
+                {# 用户菜单：Alpine 实现开合（bootstrap.bundle 仍加载，但其 dropdown data-api 不再被使用） #}
+                <div class="ui-usermenu" x-data="{ open: false }"
+                     @click.outside="open = false"
+                     @keydown.escape.window="open = false">
+                    <button type="button" class="ui-usermenu-btn" @click="open = !open"
+                            aria-haspopup="menu" :aria-expanded="open.toString()">
+                        <i class="bi bi-person-circle"></i>
+                        <span>{{ current_user.username }}</span>
+                        {% if current_user.is_admin %}<span class="ui-badge ui-badge-warning">管理员</span>{% endif %}
+                        <i class="bi bi-chevron-down ui-usermenu-caret"></i>
+                    </button>
+                    <div class="ui-usermenu-menu" x-cloak x-show="open" style="display: none" role="menu">
+                        {% if current_user.is_admin %}
+                        <a class="ui-usermenu-item" href="{{ url_for('views.users') }}" role="menuitem">
+                            <i class="bi bi-people"></i> 用户管理
                         </a>
-                        <ul class="dropdown-menu dropdown-menu-end">
-                            {% if current_user.is_admin %}
-                            <li><a class="dropdown-item" href="{{ url_for('views.users') }}">
-                                <i class="bi bi-people"></i> 用户管理
-                            </a></li>
-                            <li><hr class="dropdown-divider"></li>
-                            {% endif %}
-                            <li><a class="dropdown-item" href="{{ url_for('views.logout') }}">
-                                <i class="bi bi-box-arrow-right"></i> 退出登录
-                            </a></li>
-                        </ul>
-                    </li>
-                </ul>
+                        <div class="ui-usermenu-divider" role="separator"></div>
+                        {% endif %}
+                        <a class="ui-usermenu-item" href="{{ url_for('views.logout') }}" role="menuitem">
+                            <i class="bi bi-box-arrow-right"></i> 退出登录
+                        </a>
+                    </div>
+                </div>
                 {% endif %}
             </div>
         </header>
@@ -99,18 +106,14 @@
         </footer>
     </div>
 
-    <!-- 全局提示 -->
-    <div class="toast-container position-fixed bottom-0 end-0 p-3">
-        <div id="global-toast" class="toast" role="alert">
-            <div class="toast-header">
-                <strong class="me-auto" id="toast-title">提示</strong>
-                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
-            </div>
-            <div class="toast-body" id="toast-body"></div>
-        </div>
-    </div>
+    {# 全局提示容器：showToast（app.js）向内写入 .ui-toast 结构并自动消失 #}
+    <div class="ui-toast-wrap" id="global-toast" aria-live="polite" aria-atomic="false"></div>
 
+    {# 脚本顺序契约：bootstrap.bundle（未迁移页面的 Modal/Tab/Offcanvas 仍依赖）
+       → alpine(defer，解析完成后执行) → app.js（注册 alpine:init / 全局工具）
+       → 各页 block scripts #}
     <script src="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.bundle.min.js') }}"></script>
+    <script defer src="{{ static_v('vendor/alpine/3.14.9/alpine.min.js') }}"></script>
     <script src="{{ static_v('js/app.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
