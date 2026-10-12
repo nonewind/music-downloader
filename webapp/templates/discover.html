@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{% import "macros/ui.html" as ui %}
+{% block title %}发现 - Deen音乐下载器{% endblock %}
+{% block content %}
+<style>
+    /* 发现页局部样式（disc- 前缀，页面自治；ui- 组件层不改动） */
+    .disc-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .disc-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
+    .disc-headactions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .disc-platpill { display: inline-flex; gap: 2px; padding: 2px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 999px; }
+    .disc-plat-btn { border: 0; background: transparent; padding: 5px 16px; border-radius: 999px; font-size: 13px; color: var(--ui-text-2); cursor: pointer; transition: background-color .15s, color .15s; }
+    .disc-plat-btn:hover { color: var(--ui-text); }
+    .disc-plat-btn.active { background: var(--ui-primary); color: #fff; }
+    .disc-searchrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+    .disc-searchrow label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-2); white-space: nowrap; }
+    .disc-searchrow .ui-input { width: 240px; }
+    .disc-hint { padding: 0 var(--ui-sp-5) 10px; font-size: 12px; color: var(--ui-text-3); }
+    .disc-mb { margin-bottom: 14px; }
+    .disc-resulthead { margin: 0 0 8px; font-size: 14px; font-weight: 600; color: var(--ui-text); }
+    .disc-songname { display: block; max-width: 260px; }
+    .disc-tablewrap { overflow-x: auto; }
+    .disc-sechead { display: flex; width: 100%; align-items: center; gap: 8px; padding: 10px var(--ui-sp-5); border: 0; background: transparent; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--ui-text); text-align: left; }
+    .disc-sechead .disc-caret { margin-left: auto; color: var(--ui-text-3); transition: transform .15s; }
+    .disc-sechead .disc-caret.open { transform: rotate(180deg); }
+    .disc-filterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .disc-filterrow label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-2); white-space: nowrap; }
+    .disc-sectiontitle { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .disc-loading { padding: 8px 0; font-size: 13px; color: var(--ui-text-2); }
+    .disc-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 12px; margin-bottom: 6px; }
+    .disc-card { display: flex; flex-direction: column; border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); background: var(--ui-surface); overflow: hidden; transition: box-shadow .15s; }
+    .disc-card:hover { box-shadow: var(--ui-shadow-2); }
+    .disc-cover { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--ui-bg); }
+    .disc-cover-ph { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; font-size: 30px; color: var(--ui-text-3); background: var(--ui-bg); }
+    .disc-cardbody { padding: 8px 8px 2px; min-width: 0; }
+    .disc-cardtitle { margin: 0 0 2px; font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .disc-cardmeta { margin: 0; font-size: 12px; color: var(--ui-text-3); }
+    .disc-cardfoot { padding: 6px 8px 8px; margin-top: auto; }
+    .disc-cardfoot .ui-btn { width: 100%; justify-content: center; }
+    .disc-pageinfo { margin-top: 6px; font-size: 12px; }
+    .disc-label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--ui-text); }
+    .disc-label .ui-select, .disc-label .ui-input { display: block; width: 100%; margin-top: 6px; }
+    .disc-formhint { margin: -6px 0 12px; font-size: 12px; color: var(--ui-text-3); }
+</style>
+
+<div x-data="discoverPage()" x-cloak>
+    <!-- 页头：标题 + 平台分段控件（pill 风格）+ 添加歌单 -->
+    <div class="disc-pagehead">
+        <h4><i class="bi bi-compass"></i> 发现</h4>
+        <div class="disc-headactions">
+            <div class="disc-platpill" role="group" aria-label="平台切换">
+                <template x-for="p in platforms" :key="p.key">
+                    <button type="button" class="disc-plat-btn"
+                            :class="{ active: platform === p.key }"
+                            :aria-pressed="platform === p.key ? 'true' : 'false'"
+                            @click="switchPlatform(p.key)" x-text="p.name"></button>
+                </template>
+            </div>
+            {{ ui.btn('添加歌单', 'primary', size='sm', icon='plus-circle', attrs={'@click': 'openAdd()'}) }}
+        </div>
+    </div>
+
+    <!-- 1. 搜索区（置顶，默认焦点） -->
+    <div class="ui-card disc-mb">
+        <div class="ui-card-body">
+            <div class="disc-searchrow">
+                <label>关键词
+                    <input type="text" class="ui-input" x-ref="kw" x-model="search.keyword"
+                           placeholder="如：周杰伦 / 晴天 / 范特西" @keydown.enter="doSearch()">
+                </label>
+                <label>类型
+                    <select class="ui-select" x-model="search.type" @change="resetSearchOnType()">
+                        <option value="song">歌曲名</option>
+                        <option value="artist">歌手</option>
+                        <option value="album">专辑</option>
+                    </select>
+                </label>
+                <label>每页
+                    <select class="ui-select" x-model.number="search.limit" @change="search.page = 1">
+                        <option value="30">30</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </label>
+                {{ ui.btn('搜索', 'primary', size='sm', icon='search', attrs={'@click': 'doSearch()'}) }}
+                <span x-show="!searchIsAlbum">
+                    {{ ui.btn('全部下载', 'secondary', size='sm', icon='cloud-arrow-down',
+                              attrs={'@click': 'downloadAllClick()', ':disabled': 'allBusy',
+                                     ':class': "{ 'is-loading': allBusy }"}) }}
+                </span>
+            </div>
+        </div>
+        <div class="disc-hint">
+            <i class="bi bi-info-circle"></i>
+            "全部下载"应用排除关键字过滤（仅歌曲模式显示）；专辑模式点击行内"下载专辑"按钮直接下载整张专辑
+        </div>
+    </div>
+
+    <!-- 2. 搜索结果：空态提示 / 歌曲表 / 专辑表 + 分页 -->
+    <div x-show="!search.searched && !searchLoading" class="disc-mb">
+        {{ ui.empty('search', '输入关键词后搜索歌曲、歌手或专辑') }}
+    </div>
+    <div class="ui-card disc-mb" x-show="search.searched || searchLoading">
+        <div class="ui-card-body">
+            <p class="disc-resulthead" x-text="'搜索结果: ' + search.keyword + '（第 ' + search.page + ' 页）'"></p>
+            <div class="disc-tablewrap">
+                {# 歌曲/歌手模式（歌手搜索后端同样返回单曲列表） #}
+                <table class="ui-table" x-show="!searchIsAlbum">
+                    <thead>
+                        <tr>
+                            <th style="width:56px">#</th>
+                            <th>歌曲</th>
+                            <th>歌手</th>
+                            <th>专辑</th>
+                            <th style="width:72px">类型</th>
+                            <th style="width:84px">状态</th>
+                            <th style="width:64px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="ui-table-empty" x-show="searchLoading"><td colspan="7">搜索中…</td></tr>
+                        <tr class="ui-table-empty" x-show="!searchLoading && !search.items.length"><td colspan="7">无搜索结果</td></tr>
+                        <template x-for="(s, idx) in search.items" :key="String(s.id) + ':' + idx">
+                            <tr x-show="!searchLoading">
+                                <td class="ui-mono" x-text="(search.page - 1) * search.limit + idx + 1"></td>
+                                <td><span class="disc-songname ui-truncate" x-text="s.name" :title="s.name"></span></td>
+                                <td x-text="s.artists"></td>
+                                <td><span class="ui-text-3" style="font-size:12px" x-text="s.album || '—'"></span></td>
+                                <td>
+                                    <span class="ui-badge ui-badge-warning" x-show="s.fee === 1">VIP</span>
+                                    <span class="ui-badge ui-badge-success" x-show="s.fee !== 1">免费</span>
+                                </td>
+                                <td>
+                                    <span class="ui-badge ui-badge-info" x-show="s.downloading">下载中</span>
+                                    <span class="ui-badge ui-badge-muted" x-show="s.downloaded && !s.downloading">已下载</span>
+                                    <span class="ui-badge ui-badge-muted" x-show="!s.downloaded && !s.downloading">未下载</span>
+                                </td>
+                                <td>
+                                    <button type="button" class="ui-btn ui-btn-sm"
+                                            :class="s.downloaded ? 'ui-btn-secondary' : 'ui-btn-primary'"
+                                            :disabled="s.busy || s.downloading"
+                                            :title="s.downloaded ? '重新下载' : '下载'"
+                                            @click="downloadSong(s)">
+                                        <span class="ui-spinner" x-show="s.busy"></span>
+                                        <i class="bi bi-check2" x-show="!s.busy && s.downloading"></i>
+                                        <i class="bi bi-download" x-show="!s.busy && !s.downloading"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                {# 专辑模式 #}
+                <table class="ui-table" x-show="searchIsAlbum">
+                    <thead>
+                        <tr>
+                            <th style="width:56px">#</th>
+                            <th>歌手</th>
+                            <th>专辑名</th>
+                            <th style="width:90px">歌曲数</th>
+                            <th style="width:110px">发行时间</th>
+                            <th style="width:110px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr class="ui-table-empty" x-show="searchLoading"><td colspan="6">搜索中…</td></tr>
+                        <tr class="ui-table-empty" x-show="!searchLoading && !search.items.length"><td colspan="6">无搜索结果</td></tr>
+                        <template x-for="(a, idx) in search.items" :key="String(a.id) + ':' + idx">
+                            <tr x-show="!searchLoading">
+                                <td class="ui-mono" x-text="(search.page - 1) * search.limit + idx + 1"></td>
+                                <td x-text="a.artist"></td>
+                                <td><span class="disc-songname ui-truncate" x-text="a.name" :title="a.name"></span></td>
+                                <td class="ui-mono" x-text="a.size || '—'"></td>
+                                <td><span class="ui-text-3" style="font-size:12px" x-text="fmtPub(a.publish_time)"></span></td>
+                                <td>
+                                    <button type="button" class="ui-btn ui-btn-sm"
+                                            :class="a.queued ? 'ui-btn-secondary' : 'ui-btn-primary'"
+                                            :disabled="a.busy || a.queued"
+                                            @click="downloadAlbum(a)">
+                                        <span class="ui-spinner" x-show="a.busy"></span>
+                                        <i class="bi bi-check2" x-show="!a.busy && a.queued"></i>
+                                        <i class="bi bi-cloud-arrow-down" x-show="!a.busy && !a.queued"></i>
+                                        <span x-text="a.queued ? '已入队' : '下载专辑'"></span>
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+            <ul class="ui-pagination" x-show="searchPagerItems.length">
+                <template x-for="(it, idx) in searchPagerItems" :key="idx">
+                    <li :class="{ active: it.type === 'num' && it.p === search.page,
+                                  disabled: it.type === 'gap' || (it.type === 'prev' && search.page <= 1) || (it.type === 'next' && search.page >= search.pages) }">
+                        <a class="ui-page-btn" href="#" x-text="it.label" @click.prevent="gotoSearch(it)"></a>
+                    </li>
+                </template>
+            </ul>
+        </div>
+    </div>
+
+    <!-- 3. 官方排行榜（可折叠分区，默认展开） -->
+    <div class="ui-card disc-mb">
+        <button type="button" class="disc-sechead" @click="toggleTop()"
+                :aria-expanded="topOpen ? 'true' : 'false'">
+            <i class="bi bi-trophy"></i> 官方排行榜
+            <i class="bi bi-chevron-down disc-caret" :class="{ open: topOpen }"></i>
+        </button>
+        <div class="ui-card-body" x-show="topOpen">
+            <div class="disc-loading" x-show="topLoading">加载中…</div>
+            <div class="disc-loading" x-show="!topLoading && !toplists.length">暂无数据</div>
+            <div class="disc-cards" x-show="!topLoading && toplists.length">
+                <template x-for="t in toplists" :key="String(t.id)">
+                    <div class="disc-card">
+                        <template x-if="t.cover_img_url">
+                            <img class="disc-cover" :src="t.cover_img_url" :alt="t.name" loading="lazy">
+                        </template>
+                        <template x-if="!t.cover_img_url">
+                            <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
+                        </template>
+                        <div class="disc-cardbody">
+                            <p class="disc-cardtitle ui-truncate" x-text="t.name" :title="t.name"></p>
+                            <p class="disc-cardmeta ui-truncate" x-text="cardMeta(t, 'toplist')"></p>
+                        </div>
+                        <div class="disc-cardfoot">
+                            <button type="button" class="ui-btn ui-btn-sm" :class="cardBtnCls(t)"
+                                    :disabled="isAdded(t.id) || t.addable === false || t.busy"
+                                    :title="t.addable === false ? '该榜单为专辑/非歌曲类榜单，无歌曲列表' : ''"
+                                    @click="addFromCard(t, 'official')">
+                                <span class="ui-spinner" x-show="t.busy"></span>
+                                <template x-if="!t.busy && isAdded(t.id)"><span><i class="bi bi-check2"></i> 已添加</span></template>
+                                <template x-if="!t.busy && !isAdded(t.id) && t.addable === false"><span><i class="bi bi-slash-circle"></i> 非歌曲榜</span></template>
+                                <template x-if="!t.busy && !isAdded(t.id) && t.addable !== false"><span><i class="bi bi-plus"></i> 添加</span></template>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. 热门歌单（可折叠分区，默认收起，首次展开才拉取） -->
+    <div class="ui-card disc-mb">
+        <button type="button" class="disc-sechead" @click="toggleHot()"
+                :aria-expanded="hotOpen ? 'true' : 'false'">
+            <i class="bi bi-fire"></i> 热门歌单
+            <i class="bi bi-chevron-down disc-caret" :class="{ open: hotOpen }"></i>
+        </button>
+        <div class="ui-card-body" x-show="hotOpen">
+            <div class="disc-filterrow">
+                <label>分类
+                    <select class="ui-select" @change="hotCat = $event.target.value; hotPage = 1">
+                        <option value="全部" :selected="hotCat === '全部'">全部</option>
+                        <template x-for="c in cats.filter(c => c !== '全部')" :key="c">
+                            <option :value="c" :selected="hotCat === c" x-text="c"></option>
+                        </template>
+                    </select>
+                </label>
+                <label>排序
+                    <select class="ui-select" x-model="hotOrder" @change="hotPage = 1">
+                        <option value="hot">热门</option>
+                        <option value="new">最新</option>
+                    </select>
+                </label>
+                <label>每页数量
+                    <select class="ui-select" x-model.number="hotLimit" @change="hotPage = 1; loadHot(1)">
+                        <option value="10">10</option>
+                        <option value="20">20</option>
+                        <option value="50">50</option>
+                    </select>
+                </label>
+                {{ ui.btn('查询', 'primary', size='sm', icon='search', attrs={'@click': 'loadHot(1)'}) }}
+            </div>
+
+            <p class="disc-sectiontitle" x-text="hotTitle"></p>
+
+            <div class="disc-loading" x-show="hotLoading">加载中…</div>
+            <div class="disc-loading" x-show="!hotLoading && !hotItems.length">暂无数据</div>
+            <div class="disc-cards" x-show="!hotLoading && hotItems.length">
+                <template x-for="p in hotItems" :key="String(p.id)">
+                    <div class="disc-card">
+                        <template x-if="p.cover_img_url">
+                            <img class="disc-cover" :src="p.cover_img_url" :alt="p.name" loading="lazy">
+                        </template>
+                        <template x-if="!p.cover_img_url">
+                            <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
+                        </template>
+                        <div class="disc-cardbody">
+                            <p class="disc-cardtitle ui-truncate" x-text="p.name" :title="p.name"></p>
+                            <p class="disc-cardmeta ui-truncate" x-text="cardMeta(p, 'hot')"></p>
+                        </div>
+                        <div class="disc-cardfoot">
+                            <button type="button" class="ui-btn ui-btn-sm" :class="cardBtnCls(p)"
+                                    :disabled="isAdded(p.id) || p.busy"
+                                    @click="addFromCard(p, 'user')">
+                                <span class="ui-spinner" x-show="p.busy"></span>
+                                <template x-if="!p.busy && isAdded(p.id)"><span><i class="bi bi-check2"></i> 已添加</span></template>
+                                <template x-if="!p.busy && !isAdded(p.id)"><span><i class="bi bi-plus"></i> 添加</span></template>
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <ul class="ui-pagination" x-show="hotPagerItems.length">
+                <template x-for="(it, idx) in hotPagerItems" :key="idx">
+                    <li :class="{ active: it.type === 'num' && it.p === hotPage,
+                                  disabled: it.type === 'gap' || (it.type === 'prev' && hotPage <= 1) || (it.type === 'next' && hotPage >= hotPages) }">
+                        <a class="ui-page-btn" href="#" x-text="it.label" @click.prevent="gotoHot(it)"></a>
+                    </li>
+                </template>
+            </ul>
+            <p class="disc-pageinfo ui-text-3" x-show="hotPagerItems.length"
+               x-text="'第 ' + hotPage + ' 页 / 共 ' + hotPages + ' 页（总 ' + hotTotal + ' 个）'"></p>
+        </div>
+    </div>
+
+    {# 5. 添加歌单弹窗（ID/链接 + 平台 + 类型 + 默认前 N；default_playlist_limit 来自 /api/settings） #}
+    {% set add_body %}
+    <label class="disc-label">歌单 ID 或分享链接
+        <input type="text" class="ui-input" x-model="addForm.source" placeholder="粘贴歌单链接或输入 ID">
+    </label>
+    <div class="disc-formhint">支持格式：纯数字 ID、分享链接、短链接</div>
+    <label class="disc-label">平台
+        <select class="ui-select" @change="addForm.platform = $event.target.value">
+            <template x-for="p in platforms" :key="p.key">
+                <option :value="p.key" :selected="addForm.platform === p.key" x-text="p.name"></option>
+            </template>
+        </select>
+    </label>
+    <label class="disc-label">类型
+        <select class="ui-select" x-model="addForm.type">
+            <option value="user">自定义歌单</option>
+            <option value="official">官方榜单</option>
+        </select>
+    </label>
+    <label class="disc-label">下载前 N 首
+        <input type="number" class="ui-input" x-model.number="addForm.limit" min="1" max="9999">
+    </label>
+    {% endset %}
+    {% set add_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.addPl = false'}) }}
+    {{ ui.btn('添加', 'primary', attrs={':disabled': 'addBusy', ':class': "{ 'is-loading': addBusy }", '@click': 'confirmAdd()'}) }}
+    {% endset %}
+    {{ ui.modal('addPl', '添加歌单', add_body, add_footer) }}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window._AVAILABLE_PLATFORMS = {{ platforms | tojson | safe }};
+</script>
+<script src="{{ static_v('js/discover.js') }}"></script>
+{% endblock %}

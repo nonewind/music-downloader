@@ -1,285 +1,138 @@
 {% extends "base.html" %}
+{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{% import "macros/ui.html" as ui %}
 {% block title %}歌单管理 - Deen音乐下载器{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0"><i class="bi bi-list-music"></i> 歌单管理</h4>
-</div>
+<style>
+    /* 歌单页局部样式（pl- 前缀，页面自治；ui- 组件层不改动） */
+    .pl-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .pl-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
+    .pl-tablewrap { overflow-x: auto; }
+    .pl-limit { width: 76px; }
+    .pl-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+    .pl-switch { position: relative; display: inline-block; width: 34px; height: 20px; }
+    .pl-switch input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; cursor: pointer; opacity: 0; }
+    .pl-track { position: absolute; inset: 0; background: var(--ui-border); border-radius: 999px; transition: background-color .15s; }
+    .pl-track::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: var(--ui-shadow-1); transition: transform .15s; }
+    .pl-switch input:checked + .pl-track { background: var(--ui-primary); }
+    .pl-switch input:checked + .pl-track::before { transform: translateX(14px); }
+    .pl-label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--ui-text); }
+    .pl-label .ui-select, .pl-label .ui-input { display: block; width: 100%; margin-top: 6px; }
+    .pl-formhint { margin: -6px 0 12px; font-size: 12px; color: var(--ui-text-3); }
+</style>
 
-<!-- 标签页切换 -->
-<ul class="nav nav-tabs mb-3" id="playlist-tabs">
-    <li class="nav-item">
-        <a class="nav-link active" href="#" data-tab="mine">
-            <i class="bi bi-bookmark-star"></i> 我的歌单
-        </a>
-    </li>
-    {% for p in platforms %}
-    <li class="nav-item">
-        <a class="nav-link" href="#" data-tab="discover" data-platform="{{ p.key }}">
-            <i class="bi bi-{{ p.icon }}"></i> {{ p.name }}
-        </a>
-    </li>
-    {% endfor %}
-</ul>
-
-<!-- Tab 1: 我的歌单 -->
-<div id="tab-mine">
-    <div class="d-flex justify-content-end mb-3">
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#add-modal">
-            <i class="bi bi-plus-circle"></i> 添加歌单
-        </button>
+<div x-data="playlistsPage()" x-cloak>
+    <!-- 页头：标题 + 添加歌单 -->
+    <div class="pl-pagehead">
+        <h4><i class="bi bi-music-note-list"></i> 歌单管理</h4>
+        {{ ui.btn('添加歌单', 'primary', icon='plus-circle', attrs={'@click': 'openAdd()'}) }}
     </div>
-    <div class="card">
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-hover align-middle">
-                    <thead>
-                        <tr>
-                            <th width="50">启用</th>
-                            <th>歌单名称</th>
-                            <th width="80">类型</th>
-                            <th width="100">下载数量</th>
-                            <th width="110">歌曲总数</th>
-                            <th width="160">上次同步</th>
-                            <th width="200">操作</th>
+
+    <!-- 我的歌单表格 -->
+    <div class="ui-card" x-show="loading || playlists.length">
+        <div class="ui-card-body pl-tablewrap">
+            <table class="ui-table">
+                <thead>
+                    <tr>
+                        <th style="width:60px">启用</th>
+                        <th>歌单名称</th>
+                        <th style="width:90px">类型</th>
+                        <th style="width:100px">下载数量</th>
+                        <th style="width:90px">歌曲总数</th>
+                        <th style="width:160px">上次同步</th>
+                        <th style="width:160px">操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr class="ui-table-empty" x-show="loading"><td colspan="7">加载中…</td></tr>
+                    <template x-for="p in playlists" :key="rowKey(p)">
+                        <tr x-show="!loading">
+                            <td>
+                                <span class="pl-switch">
+                                    <input type="checkbox" role="switch" :checked="p.enabled"
+                                           :aria-label="'启用：' + p.name"
+                                           @change="toggleEnabled(p, $event.target.checked)">
+                                    <span class="pl-track"></span>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="pl-name">
+                                    <span class="ui-badge" :class="platBadgeCls(p.platform)"
+                                          x-text="p.platform_name || platName(p.platform)"></span>
+                                    <span class="ui-truncate" x-text="p.name" :title="p.name"></span>
+                                </span>
+                            </td>
+                            <td>
+                                <span class="ui-badge" :class="p.type === 'official' ? 'ui-badge-info' : 'ui-badge-muted'"
+                                      x-text="typeText(p)"></span>
+                            </td>
+                            <td>
+                                <input type="number" class="ui-input pl-limit" :value="p.limit_count"
+                                       min="1" max="9999" @change="updateLimit(p, $event.target.value)">
+                            </td>
+                            <td class="ui-mono" x-text="p.track_count || 0"></td>
+                            <td>
+                                <span class="ui-text-3" style="font-size:12px"
+                                      x-text="p.last_synced_at || '从未同步'"></span>
+                            </td>
+                            <td>
+                                <span class="ui-row-actions">
+                                    <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
+                                            :disabled="syncBusy.has(rowKey(p))"
+                                            :class="{ 'is-loading': syncBusy.has(rowKey(p)) }"
+                                            @click="syncPlaylist(p)">
+                                        <i class="bi bi-arrow-repeat"></i> 同步
+                                    </button>
+                                    <button type="button" class="ui-btn ui-btn-sm ui-btn-danger"
+                                            @click="deletePlaylistClick(p)"
+                                            title="取消关注" aria-label="取消关注">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </span>
+                            </td>
                         </tr>
-                    </thead>
-                    <tbody id="playlist-tbody">
-                        <tr><td colspan="7" class="text-center text-muted">加载中...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Tab 2: 发现 -->
-<div id="tab-discover" class="d-none">
-    <!-- 子标签切换 -->
-    <ul class="nav nav-pills mb-3" id="discover-subtabs">
-        <li class="nav-item">
-            <a class="nav-link active" href="#" data-subtab="toplists">
-                <i class="bi bi-trophy"></i> 官方排行榜
-            </a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link" href="#" data-subtab="hot">
-                <i class="bi bi-fire"></i> 热门歌单
-            </a>
-        </li>
-        <li class="nav-item">
-            <a class="nav-link" href="#" data-subtab="search">
-                <i class="bi bi-search"></i> 搜索歌手
-            </a>
-        </li>
-    </ul>
-
-    <!-- 子标签1：官方排行榜 -->
-    <div id="subtab-toplists">
-        <div class="row g-3" id="toplist-grid">
-            <div class="col-12 text-center text-muted">加载中...</div>
+                    </template>
+                </tbody>
+            </table>
         </div>
     </div>
 
-    <!-- 子标签2：热门歌单 -->
-    <div id="subtab-hot" class="d-none">
-        <!-- 筛选栏 -->
-        <div class="card mb-3">
-            <div class="card-body">
-                <div class="row g-2 align-items-end">
-                    <div class="col-md-3">
-                        <label class="form-label small">分类</label>
-                        <select class="form-select form-select-sm" id="discover-cat">
-                            <option value="全部">全部</option>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
-                        <label class="form-label small">排序</label>
-                        <select class="form-select form-select-sm" id="discover-order">
-                            <option value="hot">热门</option>
-                            <option value="new">最新</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small">每页数量</label>
-                        <select class="form-select form-select-sm" id="discover-limit">
-                            <option value="10">10</option>
-                            <option value="20" selected>20</option>
-                            <option value="50">50</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2 d-grid">
-                        <button class="btn btn-primary btn-sm" id="btn-discover-search">
-                            <i class="bi bi-search"></i> 查询
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- 歌单网格 -->
-        <h6 class="mb-3" id="hot-title">热门歌单</h6>
-        <div class="row g-3" id="hot-grid">
-            <div class="col-12 text-center text-muted">请选择分类后查询</div>
-        </div>
-
-        <!-- 翻页控件 -->
-        <div class="d-flex justify-content-between align-items-center mt-4" id="hot-pagination">
-            <small class="text-muted" id="hot-page-info">第 1 页 / 共 0 页（总 0 个）</small>
-            <div class="btn-group">
-                <button class="btn btn-outline-secondary btn-sm" id="btn-hot-prev" disabled>
-                    <i class="bi bi-chevron-left"></i> 上一页
-                </button>
-                <button class="btn btn-outline-secondary btn-sm" id="btn-hot-next" disabled>
-                    下一页 <i class="bi bi-chevron-right"></i>
-                </button>
-            </div>
-        </div>
+    <!-- 空态 -->
+    <div x-show="!loading && !playlists.length">
+        {% set empty_action %}
+        {{ ui.btn('添加歌单', 'primary', icon='plus-circle', attrs={'@click': 'openAdd()'}) }}
+        {% endset %}
+        {{ ui.empty('music-note-list', '暂无关注的歌单，先添加一个吧', empty_action) }}
     </div>
 
-    <!-- 子标签3：搜索歌手 -->
-    <div id="subtab-search" class="d-none">
-        <!-- 搜索栏 -->
-        <div class="card mb-3">
-            <div class="card-body">
-                <div class="row g-2 align-items-end">
-                    <div class="col-md-4">
-                        <label class="form-label small">关键词</label>
-                        <input type="text" class="form-control form-control-sm" id="search-keyword" placeholder="如：周杰伦 / 晴天 / 范特西">
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small">类型</label>
-                        <select class="form-select form-select-sm" id="search-type">
-                            <option value="song">歌曲名</option>
-                            <option value="artist">歌手</option>
-                            <option value="album">专辑</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2">
-                        <label class="form-label small">每页</label>
-                        <select class="form-select form-select-sm" id="search-limit">
-                            <option value="30">30</option>
-                            <option value="50" selected>50</option>
-                            <option value="100">100</option>
-                        </select>
-                    </div>
-                    <div class="col-md-2 d-grid">
-                        <button class="btn btn-primary btn-sm" id="btn-search">
-                            <i class="bi bi-search"></i> 搜索
-                        </button>
-                    </div>
-                    <div class="col-md-2 d-grid">
-                        <button class="btn btn-success btn-sm" id="btn-search-download-all">
-                            <i class="bi bi-cloud-arrow-down"></i> 全部下载
-                        </button>
-                    </div>
-                </div>
-                <div class="form-text mt-2">
-                    <i class="bi bi-info-circle"></i>
-                    "全部下载"应用排除关键字过滤（仅歌曲模式显示）；专辑模式点击行内"下载专辑"按钮直接下载整张专辑
-                </div>
-            </div>
-        </div>
-
-        <!-- 搜索结果 - 歌曲模式 -->
-        <div id="search-result-song">
-            <h6 class="mb-3" id="search-title">搜索结果</h6>
-            <div class="table-responsive">
-                <table class="table table-sm table-hover align-middle">
-                    <thead>
-                        <tr>
-                            <th width="60">#</th>
-                            <th>歌曲</th>
-                            <th>歌手</th>
-                            <th>专辑</th>
-                            <th width="80">类型</th>
-                            <th width="80">状态</th>
-                            <th width="100">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="search-tbody-song">
-                        <tr><td colspan="7" class="text-center text-muted">输入关键词后点击搜索</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- 搜索结果 - 专辑模式 -->
-        <div id="search-result-album" class="d-none">
-            <h6 class="mb-3" id="search-title-album">搜索结果</h6>
-            <div class="table-responsive">
-                <table class="table table-sm table-hover align-middle">
-                    <thead>
-                        <tr>
-                            <th width="60">#</th>
-                            <th>歌手</th>
-                            <th>专辑名</th>
-                            <th width="100">歌曲数</th>
-                            <th width="120">发行时间</th>
-                            <th width="120">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody id="search-tbody-album">
-                        <tr><td colspan="6" class="text-center text-muted">输入关键词后点击搜索</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- 分页控件 -->
-        <div class="d-flex justify-content-between align-items-center mt-3" id="search-pagination">
-            <small class="text-muted" id="search-page-info">第 1 页 / 共 0 页（总 0 个）</small>
-            <div class="btn-group">
-                <button class="btn btn-outline-secondary btn-sm" id="btn-search-prev" disabled>
-                    <i class="bi bi-chevron-left"></i> 上一页
-                </button>
-                <button class="btn btn-outline-secondary btn-sm" id="btn-search-next" disabled>
-                    下一页 <i class="bi bi-chevron-right"></i>
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 添加歌单弹窗 -->
-<div class="modal fade" id="add-modal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-plus-circle"></i> 添加歌单</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label">歌单 ID 或分享链接</label>
-                    <input type="text" class="form-control" id="add-source" placeholder="粘贴歌单链接或输入 ID">
-                    <div class="form-text">支持格式：纯数字 ID、分享链接、短链接</div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">平台</label>
-                    <select class="form-select" id="add-platform">
-                        {% for p in platforms %}
-                        <option value="{{ p.key }}">{{ platform_names[p.key] }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">类型</label>
-                    <select class="form-select" id="add-type">
-                        <option value="user">自定义歌单</option>
-                        <option value="official">官方榜单</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">下载前 N 首</label>
-                    <input type="number" class="form-control" id="add-limit" value="100" min="1" max="9999">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button class="btn btn-primary" id="btn-add-confirm">添加</button>
-            </div>
-        </div>
-    </div>
+    {# 添加歌单弹窗（与发现页同款：ID/链接 + 平台 + 类型 + 默认前 N） #}
+    {% set add_body %}
+    <label class="pl-label">歌单 ID 或分享链接
+        <input type="text" class="ui-input" x-model="addForm.source" placeholder="粘贴歌单链接或输入 ID">
+    </label>
+    <div class="pl-formhint">支持格式：纯数字 ID、分享链接、短链接</div>
+    <label class="pl-label">平台
+        <select class="ui-select" @change="addForm.platform = $event.target.value">
+            <template x-for="p in platforms" :key="p.key">
+                <option :value="p.key" :selected="addForm.platform === p.key" x-text="p.name"></option>
+            </template>
+        </select>
+    </label>
+    <label class="pl-label">类型
+        <select class="ui-select" x-model="addForm.type">
+            <option value="user">自定义歌单</option>
+            <option value="official">官方榜单</option>
+        </select>
+    </label>
+    <label class="pl-label">下载前 N 首
+        <input type="number" class="ui-input" x-model.number="addForm.limit" min="1" max="9999">
+    </label>
+    {% endset %}
+    {% set add_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.addPl = false'}) }}
+    {{ ui.btn('添加', 'primary', attrs={':disabled': 'addBusy', ':class': "{ 'is-loading': addBusy }", '@click': 'confirmAdd()'}) }}
+    {% endset %}
+    {{ ui.modal('addPl', '添加歌单', add_body, add_footer) }}
 </div>
 {% endblock %}
 

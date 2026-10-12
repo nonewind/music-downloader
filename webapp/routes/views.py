@@ -182,6 +182,19 @@ def dashboard():
     return render_template("dashboard.html", active_page="dashboard", current_user=current_user())
 
 
+@views_bp.route("/discover")
+@login_required()
+def discover():
+    """发现页（官方排行榜 / 热门歌单 / 搜索，配置驱动多平台）"""
+    return render_template(
+        "discover.html",
+        active_page="discover",
+        current_user=current_user(),
+        platforms=AVAILABLE_PLATFORMS,
+        platform_names=PLATFORM_NAMES,
+    )
+
+
 @views_bp.route("/playlists")
 @login_required()
 def playlists():
