@@ -67,16 +67,6 @@ body {
     to { transform: rotate(360deg); }
 }
 
-/* 同步指示器闪烁 */
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
-}
-
-.sync-active {
-    animation: pulse 1.5s infinite;
-}
-
 /* 发现页卡片网格 */
 .discover-card {
     cursor: default;

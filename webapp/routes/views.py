@@ -1,6 +1,6 @@
 """页面路由 - 渲染 HTML 模板
 
-包含登录/登出/用户管理路由，以及受 @login_required 保护的页面路由。
+包含登录/登出路由，以及受 @login_required 保护的页面路由。
 """
 
 import threading
@@ -220,13 +220,5 @@ def settings():
 @login_required()
 @admin_required
 def organize():
-    """音乐整理页（仅管理员，与 /users 同款限制写法）"""
+    """音乐整理页（仅管理员）"""
     return render_template("organize.html", active_page="organize", current_user=current_user())
-
-
-@views_bp.route("/users")
-@login_required()
-@admin_required
-def users():
-    """用户管理页（仅管理员）"""
-    return render_template("users.html", active_page="users", current_user=current_user())

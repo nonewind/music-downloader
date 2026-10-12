@@ -81,11 +81,11 @@ def _api_require_login():
     if not user or not user.enabled:
         session.clear()
         return jsonify({"code": 401, "msg": "用户已被禁用或不存在"}), 401
-    # 首登强制改密：默认密码未修改前，仅放行自助改密接口，其余 API 一律 403
-    # （带 must_change_password 标记，前端 app.js 据此跳改密页而非报"无权限"）
+    # 首登强制改密：默认密码未修改前，其余 API 一律 403
+    # （带 must_change_password 标记，前端 app.js 据此跳改密页而非报"无权限"；
+    # 自助改密走 /change_password 服务端表单，不经 /api/*）
     if getattr(user, "must_change_password", False):
-        if request.path.rstrip("/") != "/api/users/me/password":
-            return jsonify({"code": 403, "msg": "请先修改默认密码", "must_change_password": True}), 403
+        return jsonify({"code": 403, "msg": "请先修改默认密码", "must_change_password": True}), 403
     return None
 
 
@@ -1983,7 +1983,7 @@ def discover_download_song():
 
 
 # ======================================================================
-# 用户管理接口（仅管理员）
+# 管理员权限校验（organize / settings / 账号导出等仅管理员接口共用）
 # ======================================================================
 def _require_admin():
     """校验当前用户是否为管理员，失败返回 (response, status) 元组"""
@@ -1991,146 +1991,6 @@ def _require_admin():
     if not user or not user.is_admin:
         return jsonify({"code": 403, "msg": "仅管理员可访问"}), 403
     return None
-
-
-@api_bp.route("/users/me/password", methods=["POST"])
-def change_my_password():
-    """当前用户自助修改密码
-
-    请求体：{"old_password":"xxx", "new_password":"xxx"}
-    首登强制改密场景由此接口解锁（_api_require_login 对本接口豁免拦截）；
-    须验证旧密码，新密码 ≥6 位且不得与旧密码相同。成功后清除
-    must_change_password 标记。
-    """
-    user = current_user()
-    if not user:
-        return jsonify({"code": 401, "msg": "未登录或登录已过期"}), 401
-    data = _json_body()
-    old_pwd = data.get("old_password") or ""
-    new_pwd = data.get("new_password") or ""
-    if not user.check_password(old_pwd):
-        return jsonify({"code": 1, "msg": "旧密码错误"})
-    if len(new_pwd) < 6:
-        return jsonify({"code": 1, "msg": "密码长度至少 6 位"})
-    if new_pwd == old_pwd:
-        return jsonify({"code": 1, "msg": "新密码不能与旧密码相同"})
-    user.set_password(new_pwd)
-    user.must_change_password = False
-    db.session.commit()
-    logger.info("用户 %s 修改了自己的密码", user.username)
-    return jsonify({"code": 0, "msg": "密码已修改"})
-
-
-@api_bp.route("/users")
-def list_users():
-    """获取用户列表（仅管理员）"""
-    err = _require_admin()
-    if err:
-        return err
-    users = User.query.order_by(User.id).all()
-    return jsonify({"code": 0, "data": [u.to_dict() for u in users]})
-
-
-@api_bp.route("/users", methods=["POST"])
-def add_user():
-    """创建用户（仅管理员）
-
-    请求体：{"username":"xxx", "password":"xxx", "is_admin":false}
-    """
-    err = _require_admin()
-    if err:
-        return err
-    data = _json_body()
-    username = (data.get("username") or "").strip()
-    password = data.get("password") or ""
-    is_admin = bool(data.get("is_admin", False))
-    if not username or not password:
-        return jsonify({"code": 1, "msg": "用户名和密码不能为空"})
-    if len(password) < 6:
-        return jsonify({"code": 1, "msg": "密码长度至少 6 位"})
-    if User.query.filter_by(username=username).first():
-        return jsonify({"code": 1, "msg": f"用户名 '{username}' 已存在"})
-
-    user = User(username=username, is_admin=is_admin, enabled=True)
-    user.set_password(password)
-    db.session.add(user)
-    db.session.commit()
-    logger.info("创建用户: %s (管理员=%s)", username, is_admin)
-    return jsonify({"code": 0, "msg": f"用户 '{username}' 已创建", "data": user.to_dict()})
-
-
-@api_bp.route("/users/<int:uid>", methods=["PUT"])
-def update_user(uid: int):
-    """更新用户信息（仅管理员）
-
-    请求体（任选字段）：
-        {"is_admin":bool, "enabled":bool, "password":"新密码"}
-    注意：管理员可重置任意用户密码；当前用户不能取消自己的管理员身份
-    """
-    err = _require_admin()
-    if err:
-        return err
-    user = User.query.get(uid)
-    if not user:
-        return jsonify({"code": 1, "msg": "用户不存在"})
-
-    data = _json_body()
-    me = current_user()
-
-    # 修改密码（管理员重置任意用户密码；重置即视为脱离默认密码态）
-    if "password" in data:
-        new_pwd = data["password"] or ""
-        if len(new_pwd) < 6:
-            return jsonify({"code": 1, "msg": "密码长度至少 6 位"})
-        user.set_password(new_pwd)
-        user.must_change_password = False
-
-    # 修改管理员身份（不能取消自己的管理员身份）
-    if "is_admin" in data:
-        new_is_admin = bool(data["is_admin"])
-        if me and me.id == user.id and not new_is_admin:
-            return jsonify({"code": 1, "msg": "不能取消自己的管理员身份"})
-        user.is_admin = new_is_admin
-
-    # 修改启用状态（不能禁用自己）
-    if "enabled" in data:
-        new_enabled = bool(data["enabled"])
-        if me and me.id == user.id and not new_enabled:
-            return jsonify({"code": 1, "msg": "不能禁用自己的账号"})
-        user.enabled = new_enabled
-
-    db.session.commit()
-    logger.info("更新用户: %s", user.username)
-    return jsonify({"code": 0, "msg": "用户信息已更新", "data": user.to_dict()})
-
-
-@api_bp.route("/users/<int:uid>", methods=["DELETE"])
-def delete_user(uid: int):
-    """删除用户（仅管理员）
-
-    限制：不能删除自己；不能删除最后一个管理员
-    """
-    err = _require_admin()
-    if err:
-        return err
-    user = User.query.get(uid)
-    if not user:
-        return jsonify({"code": 1, "msg": "用户不存在"})
-
-    me = current_user()
-    if me and me.id == user.id:
-        return jsonify({"code": 1, "msg": "不能删除自己"})
-
-    # 不能删除最后一个管理员
-    if user.is_admin:
-        admin_count = User.query.filter_by(is_admin=True, enabled=True).count()
-        if admin_count <= 1:
-            return jsonify({"code": 1, "msg": "不能删除最后一个管理员"})
-
-    db.session.delete(user)
-    db.session.commit()
-    logger.info("删除用户: %s", user.username)
-    return jsonify({"code": 0, "msg": f"用户 '{user.username}' 已删除"})
 
 
 # ======================================================================

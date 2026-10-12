@@ -198,35 +198,19 @@ function statusBadge(status) {
     return map[status] || '<span class="badge bg-secondary">' + status + '</span>';
 }
 
-// 更新同步指示器（Frontend 2.0：改用 ui-badge 徽章类，与全站视觉统一；
-// sync-active 闪烁动画类保留，底栏摘要等其余逻辑不变）
-function updateSyncIndicator(active) {
-    const el = document.getElementById("sync-indicator");
-    if (!el) return;
-    if (active) {
-        el.innerHTML = '<span class="ui-badge ui-badge-success sync-active">下载中...</span>';
-    } else {
-        el.innerHTML = '<span class="ui-badge ui-badge-muted">空闲</span>';
-    }
-}
-
 // ============================================================
 // 全局下载状态轮询（所有页面通用）
 // ============================================================
-// 任何页面都会显示导航栏的"下载中/空闲"指示器，
+// 任何页面底部都有任务状态栏，
 // 因此轮询放在全局 app.js 中，而不是只在 dashboard.js 里。
 async function refreshGlobalTaskStatus() {
     try {
         const data = await api("/api/tasks");
         const tasks = data.data || [];
-        // 用服务端 has_active（存在未被暂停的在途任务）而非任务数量：
-        // 「暂停全部」后任务仍在列表中，按数量判断会让导航栏恒显"下载中"，
-        // 与用户刚点下的暂停语义冲突。判定逻辑放服务端可避免与后端语义漂移
-        updateSyncIndicator(!!data.has_active);
         // 底部状态栏：队列摘要 + 当前下载项
         renderStatusbar(tasks, !!data.paused_all);
     } catch (e) {
-        // 静默失败：指示器是辅助信息，不应弹错提示
+        // 静默失败：状态栏是辅助信息，不应弹错提示
         console.error("刷新任务状态失败:", e);
     }
 }
@@ -312,7 +296,7 @@ window.AppUI = {
 
 // DOM 就绪后启动轮询（兼容已加载完和未加载完两种情况）
 function startGlobalStatusPolling() {
-    // 立即刷新一次，避免页面初始的"加载中..."停留过久
+    // 立即刷新一次，让底部状态栏尽快显示真实队列状态
     refreshGlobalTaskStatus();
     // 每 2 秒刷新一次（与原 dashboard.js 间隔一致）；
     // 页面在后台时不发无谓请求，切回前台下一轮自动恢复
