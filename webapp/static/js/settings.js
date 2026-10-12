@@ -1,546 +1,371 @@
-// 设置页逻辑
+// 设置页（Frontend 2.0 重写，UI-03d）：Alpine 单一状态入口 settingsPage()
+//
+// 依赖全局工具（app.js 先于本脚本加载）：api()（APP_BASE 前缀 / 401、403 /
+// code!=0 统一处理，options.timeout 可覆盖默认 15s）、showToast()、uiConfirm()。
+// 渲染全部由 Alpine 模板绑定（x-model / x-text / :class），本文件零 innerHTML。
+//
+// 后端契约（与旧页逐字段对齐）：
+//   GET    /api/settings                  全量配置（~34 项字符串键值；level_<p> 为空时
+//                                         后端已回填旧全局 level；exclude_scope 兼容旧值
+//                                         "both" = 歌单同步+搜索下载）
+//   PUT    /api/settings                  全量提交（对齐现状：34 键全集，非增量；仅管理员
+//                                         ——window.IS_ADMIN 前端禁用保存，后端二次校验；
+//                                         端口钳制/档位重置/重启提示由后端拼进 msg 经 toast 透传）
+//   GET    /api/settings/migrate-layout   {needs} 目录结构待迁移数量（needs>0 显示提示条）
+//   POST   /api/settings/migrate-layout   执行迁移（移动用户文件 → uiConfirm 显式确认；
+//                                         文件较多耗时较长 → timeout 120s）
+//   GET    /api/{ncm|qq|kugou}/status     内置 API 服务状态（timeout 5s；失败保留上次状态）
+//   POST   /api/{ncm|qq|kugou}/start      启动（首次自解压最长约 60s → timeout 70s）
+//   POST   /api/{ncm|qq|kugou}/stop       停止（危险操作 → uiConfirm danger 确认）
+//
+// 三服务状态轮询组件内统一管理：唯一 timer _pollTimer（3s，document.hidden
+// 跳过），init() 启动、destroy() 清理；自定义 URL 勾选时内置区块锁定且启停
+// 操作拦截提示；服务运行中禁改端口（title 提示先停止服务）。
 
-// 设置保存仅管理员可用（后端 PUT /api/settings 有 _require_admin 校验，
-// 前端禁用保存按钮只是避免普通用户提交后收到 403 的无效操作）
-if (window.IS_ADMIN === false) {
-    const saveBtn = document.getElementById("btn-save-settings");
-    if (saveBtn) {
-        saveBtn.disabled = true;
-        saveBtn.title = "仅管理员可修改设置";
-        saveBtn.innerHTML = '<i class="bi bi-lock"></i> 保存设置（仅管理员）';
-    }
+// 三平台内置 API 服务描述（模板 x-for 的唯一数据源；key 同时是 API 前缀）
+const SERVICE_DEFS = [
+    {
+        key: "ncm", name: "网易云API服务",
+        portKey: "ncm_api_port", autoKey: "ncm_api_auto_start",
+        customKey: "use_custom_api_url", urlKey: "custom_api_url",
+        urlPlaceholder: "http://127.0.0.1:3000",
+    },
+    {
+        key: "qq", name: "QQ音乐API服务",
+        portKey: "qq_api_port", autoKey: "qq_api_auto_start",
+        customKey: "use_custom_qq_api_url", urlKey: "qq_api_base_url",
+        urlPlaceholder: "http://127.0.0.1:45602",
+    },
+    {
+        key: "kugou", name: "酷狗音乐API服务",
+        portKey: "kugou_api_port", autoKey: "kugou_api_auto_start",
+        customKey: "use_custom_kugou_api_url", urlKey: "kugou_api_base_url",
+        urlPlaceholder: "http://127.0.0.1:45603",
+    },
+];
+
+function svcDef(key) {
+    return SERVICE_DEFS.find(d => d.key === key);
 }
 
-// 加载设置
-async function loadSettings() {
-    try {
-        const data = await api("/api/settings");
-        const s = data.data;
-        const form = document.getElementById("settings-form");
+// 单个服务的运行时状态（每次调用 settingsPage() 随实例新建，无跨页共享）
+const blankSvcState = () => ({ data: null, starting: false, stopping: false });
 
-        form.web_port.value = s.web_port || "*:45600";
-        form.ncm_api_port.value = s.ncm_api_port || "45601";
-        form.ncm_api_auto_start.checked = s.ncm_api_auto_start === "true";
-        form.use_custom_api_url.checked = s.use_custom_api_url === "true";
-        form.custom_api_url.value = s.custom_api_url || "";
-        toggleCustomUrl();
-        form.qq_api_port.value = s.qq_api_port || "45602";
-        form.qq_api_auto_start.checked = s.qq_api_auto_start === "true";
-        form.use_custom_qq_api_url.checked = s.use_custom_qq_api_url === "true";
-        form.qq_api_base_url.value = s.qq_api_base_url || "http://127.0.0.1:45602";
-        toggleCustomQqUrl();
-        form.kugou_api_port.value = s.kugou_api_port || "45603";
-        form.kugou_api_auto_start.checked = s.kugou_api_auto_start === "true";
-        form.use_custom_kugou_api_url.checked = s.use_custom_kugou_api_url === "true";
-        form.kugou_api_base_url.value = s.kugou_api_base_url || "http://127.0.0.1:45603";
-        toggleCustomKugouUrl();
+function settingsPage() {
+    return {
+        // ---- 唯一状态入口 ----
+        serviceList: SERVICE_DEFS,
+        form: {},                 // loadSettings() 全量回填（含 organize_direct_delete）
+        loading: true,
+        saving: false,
+        // 目录结构迁移：needs=null 检测中/隐藏提示条；>0 显示提示条
+        migrate: { needs: null, busy: false },
+        services: { ncm: blankSvcState(), qq: blankSvcState(), kugou: blankSvcState() },
+        _pollTimer: null,         // 三服务状态轮询（组件内唯一 timer）
 
-        form.output_dir.value = s.output_dir || "";
-        // 音质按平台独立设置（后端未单独设置时已回填旧全局 level）
-        form.level_netease.value = s.level_netease || "exhigh";
-        form.level_qq.value = s.level_qq || "exhigh";
-        form.level_kugou.value = s.level_kugou || "exhigh";
-        form.enable_quality_fallback.checked = s.enable_quality_fallback !== "false";
-        form.max_retries.value = s.max_retries || "3";
-        form.default_playlist_limit.value = s.default_playlist_limit || "50";
-        form.exclude_keywords.value = s.exclude_keywords || "";
-        // 加载过滤范围（兼容旧版 'both'）
-        let scopes = [];
-        const rawScope = s.exclude_scope || "playlist,search";
-        if (rawScope === "both") {
-            scopes = ["playlist", "search"];
-        } else {
-            scopes = rawScope.split(",").map(item => item.trim()).filter(item => item);
-        }
-        form.scope_playlist.checked = scopes.includes("playlist");
-        form.scope_search.checked = scopes.includes("search");
-        form.hourly_limit_per_account.value = s.hourly_limit_per_account || "50";
-        form.download_mode.value = s.download_mode || "fallback";
-        form.prefer_non_vip.checked = s.prefer_non_vip === "true";
-        form.sync_times.value = s.sync_times || "03:00,09:00,21:00";
-        form.sync_jitter.value = s.sync_jitter || "600";
+        // 保存按钮可用性：window.IS_ADMIN 由模板注入（后端 PUT 另有二次校验）
+        get isAdmin() { return window.IS_ADMIN === true; },
 
-        form.write_metadata.checked = s.write_metadata === "true";
-        form.write_lyric.checked = s.write_lyric === "true";
-        form.filename_include_album.checked = s.filename_include_album !== "false";
-        form.overwrite_existing.checked = s.overwrite_existing === "true";
-        form.dir_layout.value = s.dir_layout || "artist_album";
-        toggleFilenameAlbumRow();
-        refreshMigrateHint();
-        form.auto_sync_enabled.checked = s.auto_sync_enabled === "true";
-    } catch (e) {
-        showToast(e.message, "错误");
-    }
-}
+        // ============================================================
+        // 生命周期
+        // ============================================================
+        async init() {
+            this.refreshAllSvc();
+            // 3s 轮询三服务状态（页面在后台时不发无谓请求，切回前台下一轮恢复）
+            this._pollTimer = setInterval(() => this.pollSvcStatuses(), 3000);
+            await this.loadSettings();
+            this.refreshMigrateHint();
+        },
+        // 组件销毁兜底清理（页面整页跳转无需，SPA 式复用时防 timer 泄漏）
+        destroy() {
+            if (this._pollTimer) {
+                clearInterval(this._pollTimer);
+                this._pollTimer = null;
+            }
+        },
 
-// 保存设置
-document.getElementById("settings-form").addEventListener("submit", async function(e) {
-    e.preventDefault();
-    const form = this;
-    const payload = {
-        web_port: form.web_port.value.trim(),
-        ncm_api_port: form.ncm_api_port.value.trim(),
-        ncm_api_auto_start: form.ncm_api_auto_start.checked ? "true" : "false",
-        use_custom_api_url: form.use_custom_api_url.checked ? "true" : "false",
-        custom_api_url: form.use_custom_api_url.checked ? form.custom_api_url.value.trim() : "",
-        qq_api_port: form.qq_api_port.value.trim(),
-        qq_api_auto_start: form.qq_api_auto_start.checked ? "true" : "false",
-        use_custom_qq_api_url: form.use_custom_qq_api_url.checked ? "true" : "false",
-        qq_api_base_url: form.use_custom_qq_api_url.checked ? form.qq_api_base_url.value.trim() : "",
-        kugou_api_port: form.kugou_api_port.value.trim(),
-        kugou_api_auto_start: form.kugou_api_auto_start.checked ? "true" : "false",
-        use_custom_kugou_api_url: form.use_custom_kugou_api_url.checked ? "true" : "false",
-        kugou_api_base_url: form.use_custom_kugou_api_url.checked ? form.kugou_api_base_url.value.trim() : "",
-        output_dir: form.output_dir.value.trim(),
-        level_netease: form.level_netease.value,
-        level_qq: form.level_qq.value,
-        level_kugou: form.level_kugou.value,
-        enable_quality_fallback: form.enable_quality_fallback.checked ? "true" : "false",
-        max_retries: form.max_retries.value,
-        default_playlist_limit: form.default_playlist_limit.value,
-        exclude_keywords: form.exclude_keywords.value.trim(),
-        // 收集 checkbox 选中项拼接为逗号分隔字符串
-        exclude_scope: [
-            form.scope_playlist.checked ? "playlist" : "",
-            form.scope_search.checked ? "search" : "",
-        ].filter(Boolean).join(","),
-        hourly_limit_per_account: form.hourly_limit_per_account.value,
-        download_mode: form.download_mode.value,
-        prefer_non_vip: form.prefer_non_vip.checked ? "true" : "false",
-        sync_times: form.sync_times.value.trim(),
-        sync_jitter: form.sync_jitter.value,
-        write_metadata: form.write_metadata.checked ? "true" : "false",
-        write_lyric: form.write_lyric.checked ? "true" : "false",
-        filename_include_album: form.filename_include_album.checked ? "true" : "false",
-        overwrite_existing: form.overwrite_existing.checked ? "true" : "false",
-        dir_layout: form.dir_layout.value,
-        auto_sync_enabled: form.auto_sync_enabled.checked ? "true" : "false",
+        // ============================================================
+        // 配置回填与保存
+        // ============================================================
+        async loadSettings() {
+            try {
+                const data = await api("/api/settings");
+                this.applySettings(data.data || {});
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        // GET data → 表单状态（与旧页逐字段同语义；新增 organize_direct_delete）
+        applySettings(s) {
+            // exclude_scope 兼容旧值："both" = 歌单同步 + 搜索下载
+            const rawScope = s.exclude_scope || "playlist,search";
+            const scopes = rawScope === "both"
+                ? ["playlist", "search"]
+                : String(rawScope).split(",").map(x => x.trim()).filter(Boolean);
+            this.form = {
+                // Web / API 服务
+                web_port: s.web_port || "*:45600",
+                ncm_api_port: s.ncm_api_port || "45601",
+                ncm_api_auto_start: s.ncm_api_auto_start === "true",
+                use_custom_api_url: s.use_custom_api_url === "true",
+                custom_api_url: s.custom_api_url || "",
+                qq_api_port: s.qq_api_port || "45602",
+                qq_api_auto_start: s.qq_api_auto_start === "true",
+                use_custom_qq_api_url: s.use_custom_qq_api_url === "true",
+                qq_api_base_url: s.qq_api_base_url || "http://127.0.0.1:45602",
+                kugou_api_port: s.kugou_api_port || "45603",
+                kugou_api_auto_start: s.kugou_api_auto_start === "true",
+                use_custom_kugou_api_url: s.use_custom_kugou_api_url === "true",
+                kugou_api_base_url: s.kugou_api_base_url || "http://127.0.0.1:45603",
+                // 下载行为
+                output_dir: s.output_dir || "",
+                write_metadata: s.write_metadata === "true",
+                write_lyric: s.write_lyric === "true",
+                filename_include_album: s.filename_include_album !== "false",
+                overwrite_existing: s.overwrite_existing === "true",
+                max_retries: s.max_retries || "3",
+                default_playlist_limit: s.default_playlist_limit || "50",
+                exclude_keywords: s.exclude_keywords || "",
+                scope_playlist: scopes.includes("playlist"),
+                scope_search: scopes.includes("search"),
+                organize_direct_delete: s.organize_direct_delete === "true",
+                // 目录结构
+                dir_layout: s.dir_layout || "artist_album",
+                // 音质（后端未单独设置 level_<p> 时已回填旧全局 level）
+                level_netease: s.level_netease || "exhigh",
+                level_qq: s.level_qq || "exhigh",
+                level_kugou: s.level_kugou || "exhigh",
+                enable_quality_fallback: s.enable_quality_fallback !== "false",
+                // 多账号
+                download_mode: s.download_mode || "fallback",
+                prefer_non_vip: s.prefer_non_vip === "true",
+                hourly_limit_per_account: s.hourly_limit_per_account || "50",
+                // 自动同步
+                auto_sync_enabled: s.auto_sync_enabled === "true",
+                sync_times: s.sync_times || "03:00,09:00,21:00",
+                sync_jitter: s.sync_jitter || "600",
+            };
+        },
+
+        // 表单 → 全量 payload（34 键 = 后端 DEFAULT_SETTINGS 全集，非增量）。
+        // 布尔统一 "true"/"false" 字符串；自定义 URL 未勾选时提交空串（与旧页一致）
+        buildPayload() {
+            const f = this.form;
+            const flag = (v) => (v ? "true" : "false");
+            const txt = (v) => String(v ?? "").trim();
+            const scope = [];
+            if (f.scope_playlist) scope.push("playlist");
+            if (f.scope_search) scope.push("search");
+            return {
+                web_port: txt(f.web_port),
+                ncm_api_port: txt(f.ncm_api_port),
+                ncm_api_auto_start: flag(f.ncm_api_auto_start),
+                use_custom_api_url: flag(f.use_custom_api_url),
+                custom_api_url: f.use_custom_api_url ? txt(f.custom_api_url) : "",
+                qq_api_port: txt(f.qq_api_port),
+                qq_api_auto_start: flag(f.qq_api_auto_start),
+                use_custom_qq_api_url: flag(f.use_custom_qq_api_url),
+                qq_api_base_url: f.use_custom_qq_api_url ? txt(f.qq_api_base_url) : "",
+                kugou_api_port: txt(f.kugou_api_port),
+                kugou_api_auto_start: flag(f.kugou_api_auto_start),
+                use_custom_kugou_api_url: flag(f.use_custom_kugou_api_url),
+                kugou_api_base_url: f.use_custom_kugou_api_url ? txt(f.kugou_api_base_url) : "",
+                output_dir: txt(f.output_dir),
+                write_metadata: flag(f.write_metadata),
+                write_lyric: flag(f.write_lyric),
+                filename_include_album: flag(f.filename_include_album),
+                overwrite_existing: flag(f.overwrite_existing),
+                max_retries: txt(f.max_retries),
+                default_playlist_limit: txt(f.default_playlist_limit),
+                exclude_keywords: txt(f.exclude_keywords),
+                exclude_scope: scope.join(","),
+                organize_direct_delete: flag(f.organize_direct_delete),
+                dir_layout: f.dir_layout,
+                level_netease: f.level_netease,
+                level_qq: f.level_qq,
+                level_kugou: f.level_kugou,
+                enable_quality_fallback: flag(f.enable_quality_fallback),
+                download_mode: f.download_mode,
+                prefer_non_vip: flag(f.prefer_non_vip),
+                hourly_limit_per_account: txt(f.hourly_limit_per_account),
+                auto_sync_enabled: flag(f.auto_sync_enabled),
+                sync_times: txt(f.sync_times),
+                sync_jitter: txt(f.sync_jitter),
+            };
+        },
+
+        async save() {
+            if (this.saving || this.loading) return;   // 回填未完成不提交默认值
+            this.saving = true;
+            try {
+                // 钳制警告/非法档位重置/Web 端口重启提示由后端拼进 msg，toast 原样透传
+                const data = await api("/api/settings", {
+                    method: "PUT",
+                    body: JSON.stringify(this.buildPayload()),
+                });
+                showToast(data.msg, "成功", "success");
+                await this.loadSettings();
+                this.refreshAllSvc();   // 端口修改触发自动重启后立即刷新状态显示
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.saving = false;
+            }
+        },
+
+        // ============================================================
+        // 目录结构存量迁移
+        // ============================================================
+        async refreshMigrateHint() {
+            try {
+                const data = await api("/api/settings/migrate-layout");
+                this.migrate.needs = (data.data && data.data.needs) || 0;
+            } catch (e) {
+                this.migrate.needs = 0;   // 检测失败不打扰用户
+            }
+        },
+
+        // 手动触发迁移（移动用户文件必须显式确认，不做自动迁移；幂等可重复）
+        async runMigrate() {
+            if (this.migrate.busy) return;
+            const ok = await uiConfirm({
+                title: "迁移到「歌手 / 专辑」结构",
+                message: "将把已下载的存量文件搬入「歌手 / 专辑」目录。只搬位置不改文件名，已在原地的自动跳过；文件较多时可能耗时较长。",
+                confirmText: "开始迁移",
+            });
+            if (!ok) return;
+            this.migrate.busy = true;
+            try {
+                const data = await api("/api/settings/migrate-layout", { method: "POST", timeout: 120000 });
+                showToast(data.msg, "迁移", "success");
+                this.refreshMigrateHint();   // 全部归位则提示条消失
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.migrate.busy = false;
+            }
+        },
+
+        // ============================================================
+        // 三平台内置 API 服务：状态机 / 启停 / 轮询
+        // ============================================================
+
+        // 徽章状态机：自定义URL > 启动中 > 未知 > 运行中/已停止
+        svcBadge(key) {
+            const def = svcDef(key);
+            const st = this.services[key];
+            if (this.form[def.customKey]) {
+                return { cls: "ui-badge-info", text: "自定义URL", detail: "当前使用自定义API服务URL，内置服务已禁用" };
+            }
+            if (st.starting) {
+                return { cls: "ui-badge-warning", text: "启动中", detail: "首次启动需自解压，最长约 1 分钟" };
+            }
+            const d = st.data;
+            if (!d) return { cls: "ui-badge-muted", text: "未知", detail: "" };
+            const detail = this.svcDetailText(d);
+            if (d.running) return { cls: "ui-badge-success", text: "运行中", detail };
+            return { cls: "ui-badge-danger", text: "已停止", detail };
+        },
+
+        // 详情段：端口 / 配置端口 / PID / 未找到二进制（「 · 」拼接）
+        svcDetailText(d) {
+            const parts = [];
+            if (d.port) parts.push(`端口 ${d.port}`);
+            if (d.preferred_port && d.preferred_port !== d.port) parts.push(`配置端口 ${d.preferred_port}`);
+            if (d.pid) parts.push(`PID ${d.pid}`);
+            if (d.bin_exists === false) parts.push("未找到二进制");
+            return parts.join(" · ");
+        },
+
+        // 自定义 URL 勾选 = 内置区块锁定（禁端口/自动启动/启停操作）
+        isSvcCustom(key) {
+            return !!this.form[svcDef(key).customKey];
+        },
+
+        svcBusy(key) {
+            const st = this.services[key];
+            return st.starting || st.stopping;
+        },
+
+        // 运行中禁改端口（停止后恢复；自定义 URL 下一并锁定）
+        svcPortLocked(key) {
+            if (this.isSvcCustom(key)) return true;
+            const d = this.services[key].data;
+            return !!(d && d.running);
+        },
+        svcPortTitle(key) {
+            if (this.isSvcCustom(key)) return "自定义URL模式下内置服务端口不生效";
+            const d = this.services[key].data;
+            return d && d.running ? "请先停止API服务再修改端口" : "";
+        },
+
+        async refreshSvc(key) {
+            try {
+                const resp = await api(`/api/${key}/status`, { timeout: 5000 });
+                this.services[key].data = resp.data;
+            } catch (e) {
+                // 轮询失败保持上次状态即可，不打断操作
+            }
+        },
+        refreshAllSvc() {
+            SERVICE_DEFS.forEach(d => this.refreshSvc(d.key));
+        },
+        pollSvcStatuses() {
+            if (document.hidden) return;   // 页面在后台时不发无谓请求
+            this.refreshAllSvc();
+        },
+
+        async startSvc(key) {
+            if (this.isSvcCustom(key)) {
+                showToast("自定义URL模式下不可操作内置服务", "提示");
+                return;
+            }
+            if (this.services[key].starting) return;
+            this.services[key].starting = true;
+            try {
+                // 首次启动需自解压最长可达 60s，覆盖默认 15s 超时
+                const resp = await api(`/api/${key}/start`, { method: "POST", timeout: 70000 });
+                showToast(resp.msg, "成功", "success");
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.services[key].starting = false;
+                this.refreshSvc(key);
+            }
+        },
+
+        // 停止属危险操作（该平台搜索/下载立即可用性受影响）：uiConfirm danger 二次确认
+        async stopSvc(key) {
+            if (this.isSvcCustom(key)) {
+                showToast("自定义URL模式下不可操作内置服务", "提示");
+                return;
+            }
+            const name = svcDef(key).name;
+            const ok = await uiConfirm({
+                title: `停止${name}`,
+                message: `确定停止${name}吗？停止期间该平台的搜索与下载将不可用。`,
+                confirmText: "停止",
+                danger: true,
+            });
+            if (!ok) return;
+            this.services[key].stopping = true;
+            try {
+                const resp = await api(`/api/${key}/stop`, { method: "POST" });
+                showToast(resp.msg, "成功", "success");
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.services[key].stopping = false;
+                this.refreshSvc(key);
+            }
+        },
     };
-
-    try {
-        const data = await api("/api/settings", {
-            method: "PUT",
-            body: JSON.stringify(payload),
-        });
-        showToast(data.msg, "成功");
-        loadSettings();
-        refreshNcmStatus();  // 端口修改后自动重启完成，立即刷新状态显示
-        refreshQqStatus();
-        refreshKugouStatus();
-    } catch (e) {
-        showToast(e.message, "错误");
-    }
-});
-
-// 「文件名包含专辑」仅对旧版「歌手」结构有意义：结构切换时显隐，
-// 避免设置页出现与当前结构无关的选项
-function toggleFilenameAlbumRow() {
-    const layout = document.getElementById("settings-form").dir_layout.value;
-    document.getElementById("row-filename-album").style.display = layout === "artist" ? "" : "none";
-}
-document.querySelector('select[name="dir_layout"]').addEventListener("change", toggleFilenameAlbumRow);
-
-// 旧结构文件检测提示条：有存量才显示迁移入口（默认隐藏，保持页面简洁）
-async function refreshMigrateHint() {
-    const hint = document.getElementById("migrate-hint");
-    try {
-        const data = await api("/api/settings/migrate-layout");
-        if ((data.data?.needs || 0) > 0) {
-            document.getElementById("migrate-count").textContent = data.data.needs;
-            hint.classList.remove("d-none");
-        } else {
-            hint.classList.add("d-none");
-        }
-    } catch (e) {
-        hint.classList.add("d-none");  // 检测失败不打扰用户
-    }
 }
 
-// 迁移存量文件到「歌手 / 专辑」结构（手动触发：移动用户文件须显式确认，
-// 不做启动自动迁移；幂等可重复，已在原地的自动跳过）
-document.getElementById("btn-migrate-layout").addEventListener("click", async function() {
-    if (!confirm("将把已下载的存量文件搬入「歌手 / 专辑」目录。\n只搬位置不改文件名，已在原地的自动跳过；文件较多时可能耗时较长，继续？")) return;
-    const btn = this;
-    btn.disabled = true;
-    try {
-        const data = await api("/api/settings/migrate-layout", { method: "POST", timeout: 120000 });
-        showToast(data.msg, "迁移");
-        refreshMigrateHint();  // 迁移后重新检测（全部归位则提示条消失）
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-    }
-});
-
-// 自定义URL切换
-function toggleCustomUrl() {
-    const useCustom = document.getElementById("use-custom-api-url").checked;
-    const customInput = document.getElementById("custom-api-url-input");
-    const builtinSection = document.getElementById("ncm-builtin-section");
-
-    if (useCustom) {
-        customInput.disabled = false;
-        customInput.required = true;
-        customInput.focus();
-        builtinSection.style.opacity = "0.5";
-        builtinSection.style.pointerEvents = "none";
-    } else {
-        customInput.disabled = true;
-        customInput.required = false;
-        customInput.value = "";
-        builtinSection.style.opacity = "";
-        builtinSection.style.pointerEvents = "";
-    }
+// Node harness / 单测导出（浏览器端无 module 变量，此分支不生效）
+if (typeof module !== "undefined" && typeof module.exports !== "undefined") {
+    module.exports = { settingsPage, SERVICE_DEFS };
 }
-
-document.getElementById("use-custom-api-url").addEventListener("change", toggleCustomUrl);
-
-// QQ音乐自定义URL切换
-function toggleCustomQqUrl() {
-    const useCustom = document.getElementById("use-custom-qq-api-url").checked;
-    const customInput = document.getElementById("qq-api-url-input");
-    const builtinSection = document.getElementById("qq-builtin-section");
-
-    if (useCustom) {
-        customInput.disabled = false;
-        customInput.required = true;
-        customInput.focus();
-        builtinSection.style.opacity = "0.5";
-        builtinSection.style.pointerEvents = "none";
-    } else {
-        customInput.disabled = true;
-        customInput.required = false;
-        customInput.value = "";
-        builtinSection.style.opacity = "";
-        builtinSection.style.pointerEvents = "";
-    }
-}
-
-document.getElementById("use-custom-qq-api-url").addEventListener("change", toggleCustomQqUrl);
-
-// 酷狗音乐自定义URL切换
-function toggleCustomKugouUrl() {
-    const useCustom = document.getElementById("use-custom-kugou-api-url").checked;
-    const customInput = document.getElementById("kugou-api-url-input");
-    const builtinSection = document.getElementById("kugou-builtin-section");
-
-    if (useCustom) {
-        customInput.disabled = false;
-        customInput.required = true;
-        customInput.focus();
-        builtinSection.style.opacity = "0.5";
-        builtinSection.style.pointerEvents = "none";
-    } else {
-        customInput.disabled = true;
-        customInput.required = false;
-        customInput.value = "";
-        builtinSection.style.opacity = "";
-        builtinSection.style.pointerEvents = "";
-    }
-}
-
-document.getElementById("use-custom-kugou-api-url").addEventListener("change", toggleCustomKugouUrl);
-
-// 初始化
-loadSettings();
-
-// ======================================================================
-// 网易云API服务状态轮询与启停
-// ======================================================================
-const ncmStatusBadge = document.getElementById("ncm-status-badge");
-const ncmStatusDetail = document.getElementById("ncm-status-detail");
-
-function renderNcmStatus(data) {
-    // 自定义URL模式下显示特殊状态
-    const useCustom = document.getElementById("use-custom-api-url").checked;
-    const portInput = document.querySelector('[name="ncm_api_port"]');
-    if (useCustom) {
-        ncmStatusBadge.className = "badge bg-info";
-        ncmStatusBadge.textContent = "自定义URL";
-        ncmStatusDetail.textContent = "当前使用自定义API服务URL，内置服务已禁用";
-        return;
-    }
-    if (!data) {
-        ncmStatusBadge.className = "badge bg-secondary";
-        ncmStatusBadge.textContent = "未知";
-        ncmStatusDetail.textContent = "";
-        return;
-    }
-    if (data.running) {
-        ncmStatusBadge.className = "badge bg-success";
-        ncmStatusBadge.textContent = "运行中";
-        // 运行中禁止修改端口
-        portInput.disabled = true;
-        portInput.title = "请先停止API服务再修改端口";
-    } else {
-        ncmStatusBadge.className = "badge bg-danger";
-        ncmStatusBadge.textContent = "已停止";
-        // 停止后允许修改端口
-        portInput.disabled = false;
-        portInput.title = "";
-    }
-    const parts = [];
-    if (data.port) parts.push(`端口 ${data.port}`);
-    if (data.preferred_port && data.preferred_port !== data.port) parts.push(`配置端口 ${data.preferred_port}`);
-    if (data.pid) parts.push(`PID ${data.pid}`);
-    if (data.bin_exists === false) parts.push("未找到二进制");
-    ncmStatusDetail.textContent = parts.join(" · ");
-}
-
-async function refreshNcmStatus() {
-    try {
-        const resp = await api("/api/ncm/status", { timeout: 5000 });
-        renderNcmStatus(resp.data);
-    } catch (e) {
-        // 轮询失败保持上次状态即可，不打断操作
-    }
-}
-
-document.getElementById("btn-ncm-start").addEventListener("click", async function() {
-    const useCustom = document.getElementById("use-custom-api-url").checked;
-    if (useCustom) {
-        showToast("自定义URL模式下不可操作内置服务", "提示");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    ncmStatusBadge.className = "badge bg-warning";
-    ncmStatusBadge.textContent = "启动中";
-    try {
-        // 首次启动最长可达 60s，覆盖默认 15s 超时
-        const resp = await api("/api/ncm/start", { method: "POST", timeout: 70000 });
-        showToast(resp.msg, "成功");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        refreshNcmStatus();
-    }
-});
-
-document.getElementById("btn-ncm-stop").addEventListener("click", async function() {
-    const useCustom = document.getElementById("use-custom-api-url").checked;
-    if (useCustom) {
-        showToast("自定义URL模式下不可操作内置服务", "提示");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    try {
-        const resp = await api("/api/ncm/stop", { method: "POST" });
-        showToast(resp.msg, "成功");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        refreshNcmStatus();
-    }
-});
-
-// 3s 轮询状态（页面在后台时不发无谓请求）
-refreshNcmStatus();
-setInterval(() => {
-    if (document.hidden) return;
-    refreshNcmStatus();
-}, 3000);
-
-// ======================================================================
-// QQ音乐API服务状态轮询与启停
-// ======================================================================
-const qqStatusBadge = document.getElementById("qq-status-badge");
-const qqStatusDetail = document.getElementById("qq-status-detail");
-
-function renderQqStatus(data) {
-    // 自定义URL模式下显示特殊状态
-    const useCustom = document.getElementById("use-custom-qq-api-url").checked;
-    const portInput = document.querySelector('[name="qq_api_port"]');
-    if (useCustom) {
-        qqStatusBadge.className = "badge bg-info";
-        qqStatusBadge.textContent = "自定义URL";
-        qqStatusDetail.textContent = "当前使用自定义API服务URL，内置服务已禁用";
-        return;
-    }
-    if (!data) {
-        qqStatusBadge.className = "badge bg-secondary";
-        qqStatusBadge.textContent = "未知";
-        qqStatusDetail.textContent = "";
-        return;
-    }
-    if (data.running) {
-        qqStatusBadge.className = "badge bg-success";
-        qqStatusBadge.textContent = "运行中";
-        // 运行中禁止修改端口
-        portInput.disabled = true;
-        portInput.title = "请先停止API服务再修改端口";
-    } else {
-        qqStatusBadge.className = "badge bg-danger";
-        qqStatusBadge.textContent = "已停止";
-        // 停止后允许修改端口
-        portInput.disabled = false;
-        portInput.title = "";
-    }
-    const parts = [];
-    if (data.port) parts.push(`端口 ${data.port}`);
-    if (data.preferred_port && data.preferred_port !== data.port) parts.push(`配置端口 ${data.preferred_port}`);
-    if (data.pid) parts.push(`PID ${data.pid}`);
-    if (data.bin_exists === false) parts.push("未找到二进制");
-    qqStatusDetail.textContent = parts.join(" · ");
-}
-
-async function refreshQqStatus() {
-    try {
-        const resp = await api("/api/qq/status", { timeout: 5000 });
-        renderQqStatus(resp.data);
-    } catch (e) {
-        // 轮询失败保持上次状态即可，不打断操作
-    }
-}
-
-document.getElementById("btn-qq-start").addEventListener("click", async function() {
-    const useCustom = document.getElementById("use-custom-qq-api-url").checked;
-    if (useCustom) {
-        showToast("自定义URL模式下不可操作内置服务", "提示");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    qqStatusBadge.className = "badge bg-warning";
-    qqStatusBadge.textContent = "启动中";
-    try {
-        // 首次启动需自解压，最长可达 60s，覆盖默认 15s 超时
-        const resp = await api("/api/qq/start", { method: "POST", timeout: 70000 });
-        showToast(resp.msg, "成功");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        refreshQqStatus();
-    }
-});
-
-document.getElementById("btn-qq-stop").addEventListener("click", async function() {
-    const useCustom = document.getElementById("use-custom-qq-api-url").checked;
-    if (useCustom) {
-        showToast("自定义URL模式下不可操作内置服务", "提示");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    try {
-        const resp = await api("/api/qq/stop", { method: "POST" });
-        showToast(resp.msg, "成功");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        refreshQqStatus();
-    }
-});
-
-// 3s 轮询状态（页面在后台时不发无谓请求）
-refreshQqStatus();
-setInterval(() => {
-    if (document.hidden) return;
-    refreshQqStatus();
-}, 3000);
-
-// ======================================================================
-// 酷狗音乐API服务状态轮询与启停
-// ======================================================================
-const kugouStatusBadge = document.getElementById("kugou-status-badge");
-const kugouStatusDetail = document.getElementById("kugou-status-detail");
-
-function renderKugouStatus(data) {
-    // 自定义URL模式下显示特殊状态
-    const useCustom = document.getElementById("use-custom-kugou-api-url").checked;
-    const portInput = document.querySelector('[name="kugou_api_port"]');
-    if (useCustom) {
-        kugouStatusBadge.className = "badge bg-info";
-        kugouStatusBadge.textContent = "自定义URL";
-        kugouStatusDetail.textContent = "当前使用自定义API服务URL，内置服务已禁用";
-        return;
-    }
-    if (!data) {
-        kugouStatusBadge.className = "badge bg-secondary";
-        kugouStatusBadge.textContent = "未知";
-        kugouStatusDetail.textContent = "";
-        return;
-    }
-    if (data.running) {
-        kugouStatusBadge.className = "badge bg-success";
-        kugouStatusBadge.textContent = "运行中";
-        // 运行中禁止修改端口
-        portInput.disabled = true;
-        portInput.title = "请先停止API服务再修改端口";
-    } else {
-        kugouStatusBadge.className = "badge bg-danger";
-        kugouStatusBadge.textContent = "已停止";
-        // 停止后允许修改端口
-        portInput.disabled = false;
-        portInput.title = "";
-    }
-    const parts = [];
-    if (data.port) parts.push(`端口 ${data.port}`);
-    if (data.preferred_port && data.preferred_port !== data.port) parts.push(`配置端口 ${data.preferred_port}`);
-    if (data.pid) parts.push(`PID ${data.pid}`);
-    if (data.bin_exists === false) parts.push("未找到二进制");
-    kugouStatusDetail.textContent = parts.join(" · ");
-}
-
-async function refreshKugouStatus() {
-    try {
-        const resp = await api("/api/kugou/status", { timeout: 5000 });
-        renderKugouStatus(resp.data);
-    } catch (e) {
-        // 轮询失败保持上次状态即可，不打断操作
-    }
-}
-
-document.getElementById("btn-kugou-start").addEventListener("click", async function() {
-    const useCustom = document.getElementById("use-custom-kugou-api-url").checked;
-    if (useCustom) {
-        showToast("自定义URL模式下不可操作内置服务", "提示");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    kugouStatusBadge.className = "badge bg-warning";
-    kugouStatusBadge.textContent = "启动中";
-    try {
-        // 首次启动最长可达 60s，覆盖默认 15s 超时
-        const resp = await api("/api/kugou/start", { method: "POST", timeout: 70000 });
-        showToast(resp.msg, "成功");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        refreshKugouStatus();
-    }
-});
-
-document.getElementById("btn-kugou-stop").addEventListener("click", async function() {
-    const useCustom = document.getElementById("use-custom-kugou-api-url").checked;
-    if (useCustom) {
-        showToast("自定义URL模式下不可操作内置服务", "提示");
-        return;
-    }
-    const btn = this;
-    btn.disabled = true;
-    try {
-        const resp = await api("/api/kugou/stop", { method: "POST" });
-        showToast(resp.msg, "成功");
-    } catch (e) {
-        showToast(e.message, "错误");
-    } finally {
-        btn.disabled = false;
-        refreshKugouStatus();
-    }
-});
-
-// 3s 轮询状态（页面在后台时不发无谓请求）
-refreshKugouStatus();
-setInterval(() => {
-    if (document.hidden) return;
-    refreshKugouStatus();
-}, 3000);

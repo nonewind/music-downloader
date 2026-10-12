@@ -1,344 +1,329 @@
 {% extends "base.html" %}
+{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{% import "macros/ui.html" as ui %}
 {% block title %}设置 - Deen音乐下载器{% endblock %}
 {% block content %}
-<h4 class="mb-4"><i class="bi bi-gear"></i> 设置</h4>
+<style>
+    /* 设置页局部样式（set- 前缀，页面自治；ui- 组件层不改动） */
+    .set-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .set-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
+    .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 14px; align-items: start; }
+    .set-span { grid-column: 1 / -1; }
+    .set-cardhead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
+    .set-cardhead i { color: var(--ui-text-3); font-size: 16px; }
+    .set-body { padding: 16px; }
+    .set-field { margin-bottom: 14px; }
+    .set-field:last-child { margin-bottom: 0; }
+    .set-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .set-input { width: 100%; max-width: 420px; }
+    .set-hint { margin-top: 4px; font-size: 12px; color: var(--ui-text-3); }
+    .set-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    .set-check { display: flex; align-items: flex-start; gap: 4px; font-size: 13px; color: var(--ui-text); cursor: pointer; }
+    .set-check .ui-check { flex-shrink: 0; }
+    .set-checktext { line-height: 28px; min-width: 0; }
+    .set-checktext small { display: block; margin-top: 2px; font-size: 12px; line-height: 1.5; color: var(--ui-text-3); }
+    .set-switchrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 16px; }
+    .set-scope { display: inline-flex; gap: 16px; flex-wrap: wrap; }
+    .set-svc { padding: 14px 0; }
+    .set-svc:first-of-type { padding-top: 2px; }
+    .set-svc + .set-svc { border-top: 1px solid var(--ui-border); }
+    .set-svchead { font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .set-svcstatus { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; min-height: 22px; }
+    .set-svcdetail { font-size: 12px; color: var(--ui-text-3); }
+    .set-svcctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+    .set-inlinelabel { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ui-text-2); }
+    .set-port { width: 100px; }
+    .set-locked { opacity: .5; pointer-events: none; }
+    .set-customrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+    .set-customrow .set-check { flex-shrink: 0; }
+    .set-url { flex: 1 1 240px; max-width: 400px; }
+    .set-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .08); border-radius: var(--ui-r-s); font-size: 12px; color: var(--ui-text); }
+    .set-banner .ui-btn { margin-left: auto; }
+    .set-savebar { position: sticky; bottom: 10px; z-index: 800; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
+</style>
 
-<form id="settings-form" class="needs-validation" novalidate>
-<div class="row g-3">
-    <!-- Web 服务 -->
-    <div class="col-12">
-        <div class="card mb-3">
-            <div class="card-header"><i class="bi bi-globe"></i> Web 服务</div>
-            <div class="card-body">
-                <div class="row g-3 align-items-center">
-                    <div class="col-md-6">
-                        <label class="form-label">Web 服务监听地址</label>
-                        <input type="text" class="form-control" name="web_port" placeholder="*:45600" value="*:45600">
-                        <div class="form-text">格式: host:port，如 *:45600 或 127.0.0.1:45600；* 表示监听所有网卡</div>
+<div x-data="settingsPage()" x-cloak>
+    <!-- 页头 -->
+    <div class="set-pagehead">
+        <h4><i class="bi bi-gear"></i> 设置</h4>
+        <span class="ui-text-3" style="font-size: 12px">配置全局生效，保存后立即应用于所有用户</span>
+    </div>
+
+    <form @submit.prevent="save()">
+        <div class="set-grid">
+
+            <!-- Web 服务 -->
+            <div class="ui-card">
+                <div class="set-cardhead"><i class="bi bi-globe"></i> Web 服务</div>
+                <div class="set-body">
+                    <div class="set-field">
+                        <label class="set-label">Web 服务监听地址</label>
+                        <input type="text" class="ui-input set-input" x-model="form.web_port" placeholder="*:45600">
+                        <div class="set-hint">格式: host:port，如 *:45600 或 127.0.0.1:45600；* 表示监听所有网卡；修改后需重启服务生效</div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- API 服务 -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header"><i class="bi bi-hdd-network"></i> API 服务</div>
-            <div class="card-body">
-                <!-- 网易云API服务 -->
-                <h6 class="mb-3">网易云API服务</h6>
-
-                <!-- 状态 -->
-                <div class="d-flex align-items-center mb-3">
-                    <label class="form-label mb-0 me-2">状态:</label>
-                    <span id="ncm-status-badge" class="badge bg-secondary me-3">未知</span>
-                    <span id="ncm-status-detail" class="text-muted small"></span>
-                </div>
-
-                <!-- 端口 + 自动启动 + 启停按钮（同一行） -->
-                <div id="ncm-builtin-section">
-                    <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
-                        <div class="d-flex align-items-center">
-                            <label class="form-label mb-0 me-1 small">端口</label>
-                            <input type="number" class="form-control" name="ncm_api_port" min="1024" max="65535" value="45601" style="width:100px;">
-                        </div>
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="ncm_api_auto_start" id="ncm-auto-start" value="true">
-                            <label class="form-check-label small" for="ncm-auto-start">随程序启动自动启动</label>
-                        </div>
-                        <button type="button" id="btn-ncm-start" class="btn btn-sm btn-success">
-                            <i class="bi bi-play"></i> 启动
-                        </button>
-                        <button type="button" id="btn-ncm-stop" class="btn btn-sm btn-danger">
-                            <i class="bi bi-stop"></i> 停止
-                        </button>
+            <!-- 下载行为 -->
+            <div class="ui-card">
+                <div class="set-cardhead"><i class="bi bi-download"></i> 下载行为</div>
+                <div class="set-body">
+                    <div class="set-field">
+                        <label class="set-label">下载目录</label>
+                        <input type="text" class="ui-input set-input" x-model="form.output_dir" placeholder="downloads">
                     </div>
-                </div>
-
-                <!-- 自定义URL：容器外，勾选后不受内置服务禁用影响 -->
-                <div class="d-flex align-items-center mb-2">
-                    <div class="form-check me-2">
-                        <input type="checkbox" class="form-check-input" name="use_custom_api_url" id="use-custom-api-url" value="true">
-                        <label class="form-check-label" for="use-custom-api-url">使用自定义API服务URL</label>
+                    <div class="set-switchrow set-field">
+                        <label class="set-check">
+                            <span class="ui-check"><input type="checkbox" x-model="form.write_metadata"></span>
+                            <span class="set-checktext">写入元数据（标题/艺术家/专辑/封面）</span>
+                        </label>
+                        <label class="set-check">
+                            <span class="ui-check"><input type="checkbox" x-model="form.write_lyric"></span>
+                            <span class="set-checktext">嵌入歌词（LRC 带时间轴）</span>
+                        </label>
+                        {# 「文件名包含专辑」仅对旧版「歌手」结构有意义：结构切换随绑定显隐 #}
+                        <label class="set-check" x-show="form.dir_layout === 'artist'">
+                            <span class="ui-check"><input type="checkbox" x-model="form.filename_include_album"></span>
+                            <span class="set-checktext">文件名包含专辑（歌手 - 歌名 [专辑].ext）</span>
+                        </label>
+                        <label class="set-check">
+                            <span class="ui-check"><input type="checkbox" x-model="form.overwrite_existing"></span>
+                            <span class="set-checktext">同名文件已存在时覆盖重新下载（默认跳过）</span>
+                        </label>
                     </div>
-                    <span class="me-1">:</span>
-                    <input type="text" class="form-control flex-grow-1" name="custom_api_url" id="custom-api-url-input" placeholder="http://127.0.0.1:3000" style="max-width:400px;" disabled>
-                </div>
-
-                <!-- QQ音乐API服务（内置 + 可选自定义URL） -->
-                <hr class="my-3">
-                <h6 class="mb-3">QQ音乐API服务</h6>
-
-                <!-- 状态 -->
-                <div class="d-flex align-items-center mb-3">
-                    <label class="form-label mb-0 me-2">状态:</label>
-                    <span id="qq-status-badge" class="badge bg-secondary me-3">未知</span>
-                    <span id="qq-status-detail" class="text-muted small"></span>
-                </div>
-
-                <!-- 端口 + 自动启动 + 启停按钮（同一行） -->
-                <div id="qq-builtin-section">
-                    <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
-                        <div class="d-flex align-items-center">
-                            <label class="form-label mb-0 me-1 small">端口</label>
-                            <input type="number" class="form-control" name="qq_api_port" min="1024" max="65535" value="45602" style="width:100px;">
+                    <div class="set-row set-field">
+                        <div>
+                            <label class="set-label">单文件重试次数</label>
+                            <input type="number" class="ui-input set-input" x-model="form.max_retries" min="1" max="10">
                         </div>
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="qq_api_auto_start" id="qq-auto-start" value="true">
-                            <label class="form-check-label small" for="qq-auto-start">随程序启动自动启动</label>
+                        <div>
+                            <label class="set-label">添加歌单默认下载数量</label>
+                            <input type="number" class="ui-input set-input" x-model="form.default_playlist_limit" min="1" max="9999">
+                            <div class="set-hint">添加新歌单时默认的下载前 N 首</div>
                         </div>
-                        <button type="button" id="btn-qq-start" class="btn btn-sm btn-success">
-                            <i class="bi bi-play"></i> 启动
-                        </button>
-                        <button type="button" id="btn-qq-stop" class="btn btn-sm btn-danger">
-                            <i class="bi bi-stop"></i> 停止
-                        </button>
                     </div>
-                </div>
-
-                <!-- 自定义URL：容器外，勾选后不受内置服务禁用影响 -->
-                <div class="d-flex align-items-center mb-2">
-                    <div class="form-check me-2">
-                        <input type="checkbox" class="form-check-input" name="use_custom_qq_api_url" id="use-custom-qq-api-url" value="true">
-                        <label class="form-check-label" for="use-custom-qq-api-url">使用自定义API服务URL</label>
+                    <div class="set-field">
+                        <label class="set-label">排除歌曲关键字</label>
+                        <input type="text" class="ui-input set-input" x-model="form.exclude_keywords" placeholder="live,伴奏,remix">
+                        <div class="set-hint">包含这些词的歌曲不下载，多个关键字用英文逗号分隔（同时匹配歌名和歌手名）</div>
                     </div>
-                    <span class="me-1">:</span>
-                    <input type="text" class="form-control flex-grow-1" name="qq_api_base_url" id="qq-api-url-input" placeholder="http://127.0.0.1:45602" style="max-width:400px;" disabled>
-                </div>
-
-                <!-- 酷狗音乐API服务（内置 + 可选自定义URL） -->
-                <hr class="my-3">
-                <h6 class="mb-3">酷狗音乐API服务</h6>
-
-                <!-- 状态 -->
-                <div class="d-flex align-items-center mb-3">
-                    <label class="form-label mb-0 me-2">状态:</label>
-                    <span id="kugou-status-badge" class="badge bg-secondary me-3">未知</span>
-                    <span id="kugou-status-detail" class="text-muted small"></span>
-                </div>
-
-                <!-- 端口 + 自动启动 + 启停按钮（同一行） -->
-                <div id="kugou-builtin-section">
-                    <div class="d-flex align-items-center flex-wrap gap-2 mb-3">
-                        <div class="d-flex align-items-center">
-                            <label class="form-label mb-0 me-1 small">端口</label>
-                            <input type="number" class="form-control" name="kugou_api_port" min="1024" max="65535" value="45603" style="width:100px;">
+                    <div class="set-field">
+                        <label class="set-label">过滤应用范围</label>
+                        <div class="set-scope">
+                            <label class="set-check">
+                                <span class="ui-check"><input type="checkbox" x-model="form.scope_playlist"></span>
+                                <span class="set-checktext">歌单同步</span>
+                            </label>
+                            <label class="set-check">
+                                <span class="ui-check"><input type="checkbox" x-model="form.scope_search"></span>
+                                <span class="set-checktext">搜索下载</span>
+                            </label>
                         </div>
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="kugou_api_auto_start" id="kugou-auto-start" value="true">
-                            <label class="form-check-label small" for="kugou-auto-start">随程序启动自动启动</label>
-                        </div>
-                        <button type="button" id="btn-kugou-start" class="btn btn-sm btn-success">
-                            <i class="bi bi-play"></i> 启动
-                        </button>
-                        <button type="button" id="btn-kugou-stop" class="btn btn-sm btn-danger">
-                            <i class="bi bi-stop"></i> 停止
-                        </button>
+                        <div class="set-hint">单首下载不受此限制（尊重用户主动选择）</div>
                     </div>
-                </div>
-
-                <!-- 自定义URL：容器外，勾选后不受内置服务禁用影响 -->
-                <div class="d-flex align-items-center mb-2">
-                    <div class="form-check me-2">
-                        <input type="checkbox" class="form-check-input" name="use_custom_kugou_api_url" id="use-custom-kugou-api-url" value="true">
-                        <label class="form-check-label" for="use-custom-kugou-api-url">使用自定义API服务URL</label>
-                    </div>
-                    <span class="me-1">:</span>
-                    <input type="text" class="form-control flex-grow-1" name="kugou_api_base_url" id="kugou-api-url-input" placeholder="http://127.0.0.1:45603" style="max-width:400px;" disabled>
+                    {# v0.7.8.0 后端已默认 organize_direct_delete，此开关补齐设置页 UI #}
+                    <label class="set-check">
+                        <span class="ui-check"><input type="checkbox" x-model="form.organize_direct_delete"></span>
+                        <span class="set-checktext">音乐整理删除模式
+                            <small>音乐整理页清理重复文件时：开启=直接删除（不可恢复）；关闭=移入下载目录 .trash 回收站（可手动恢复，默认）</small>
+                        </span>
+                    </label>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- 下载设置 -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header"><i class="bi bi-download"></i> 下载设置</div>
-            <div class="card-body">
-                <div class="row g-3">
-                    <div class="col-md-12">
-                        <label class="form-label">下载目录</label>
-                        <input type="text" class="form-control" name="output_dir" placeholder="downloads">
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">网易云音质</label>
-                        <!-- 选项按音质从高到低排列（纯展示秩序，不参与降级逻辑） -->
-                        <select class="form-select" name="level_netease">
-                            <option value="sky">沉浸环绕声（需SVIP）</option>
-                            <option value="jymaster">超清母带（需SVIP）</option>
-                            <option value="vivid">臻音全景声（需SVIP）</option>
-                            <option value="dolby">杜比全景声（需SVIP）</option>
-                            <option value="jyeffect">高清臻音（需SVIP）</option>
-                            <option value="hires">Hi-Res（需豪华VIP）</option>
-                            <option value="lossless">无损 FLAC（需黑胶VIP）</option>
-                            <option value="exhigh">极高 320kbps（需会员）</option>
-                            <option value="standard">标准 128kbps MP3</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">QQ音乐音质</label>
-                        <!-- 选项按音质从高到低排列；hires 与 lossless 同为 FLAC，
-                             保留 hires 项避免存量设置显示空白 -->
-                        <select class="form-select" name="level_qq">
-                            <option value="jymaster">臻品母带 FLAC 24bit/192kHz（需豪华绿钻）</option>
-                            <option value="hires">无损 FLAC（Hi-Res 档同无损）</option>
-                            <option value="lossless">无损 FLAC（需绿钻）</option>
-                            <option value="ogg640">OGG 640k SQ 无损（需VIP，备选）</option>
-                            <option value="exhigh">320kbps MP3（需登录）</option>
-                            <option value="standard">标准 128kbps MP3</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <label class="form-label">酷狗音乐音质</label>
-                        <!-- 选项按音质从高到低排列（仅重排原有档位，档位集不变） -->
-                        <select class="form-select" name="level_kugou">
-                            <option value="hires">Hi-Res（需豪华VIP）</option>
-                            <option value="lossless">无损 FLAC（需VIP）</option>
-                            <option value="exhigh">320kbps MP3（需登录）</option>
-                            <option value="standard">标准 128kbps MP3</option>
-                        </select>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="enable_quality_fallback" value="true">
-                            <label class="form-check-label">目标音质不可用时自动降档（回退到更低音质下载）</label>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="write_metadata" value="true">
-                            <label class="form-check-label">写入元数据（标题/艺术家/专辑/封面）</label>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="write_lyric" value="true">
-                            <label class="form-check-label">嵌入歌词（LRC 带时间轴）</label>
-                        </div>
-                    </div>
-                    <div class="col-md-6" id="row-filename-album" style="display:none">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="filename_include_album" value="true">
-                            <label class="form-check-label">文件名包含专辑（歌手 - 歌名 [专辑].ext）</label>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="overwrite_existing" value="true">
-                            <label class="form-check-label">同名文件已存在时覆盖重新下载（默认跳过）</label>
-                        </div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">下载目录结构</label>
-                        <select class="form-select" name="dir_layout">
+            <!-- 目录结构 -->
+            <div class="ui-card">
+                <div class="set-cardhead"><i class="bi bi-folder-symlink"></i> 目录结构</div>
+                <div class="set-body">
+                    <div class="set-field">
+                        <label class="set-label">下载目录结构</label>
+                        <select class="ui-select set-input" x-model="form.dir_layout">
                             <option value="artist_album">歌手 / 专辑（年份）/ 歌曲名</option>
                             <option value="artist">歌手 / 歌曲名（旧版结构）</option>
                         </select>
-                        <div class="form-text">新结构下文件名为「歌名-歌曲ID」；单曲无专辑名时用歌名当专辑目录；切换只影响新下载</div>
-                        <div class="alert alert-warning py-2 px-3 mt-2 mb-0 d-none" id="migrate-hint">
-                            <div class="small mb-1">检测到 <span id="migrate-count">0</span> 个旧结构文件未迁移</div>
-                            <button type="button" class="btn btn-sm btn-warning" id="btn-migrate-layout">
-                                <i class="bi bi-folder-symlink"></i> 迁移到「歌手 / 专辑」结构
-                            </button>
+                        <div class="set-hint">新结构下文件名为「歌名-歌曲ID」；单曲无专辑名时用歌名当专辑目录；切换只影响新下载</div>
+                        {# 旧结构文件检测提示条：有存量才显示迁移入口（移动用户文件须 uiConfirm 显式确认） #}
+                        <div class="set-banner" x-show="migrate.needs !== null && migrate.needs > 0">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            <span x-text="'检测到 ' + migrate.needs + ' 个旧结构文件未迁移'"></span>
+                            {{ ui.btn('迁移到「歌手 / 专辑」结构', 'primary', size='sm', icon='folder-symlink',
+                                      attrs={':disabled': 'migrate.busy',
+                                             ':class': "{ 'is-loading': migrate.busy }",
+                                             '@click': 'runMigrate()'}) }}
                         </div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">单文件重试次数</label>
-                        <input type="number" class="form-control" name="max_retries" min="1" max="10" value="3">
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">添加歌单默认下载数量</label>
-                        <input type="number" class="form-control" name="default_playlist_limit" min="1" max="9999" value="50">
-                        <div class="form-text">添加新歌单时默认的下载前 N 首</div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">排除歌曲关键字</label>
-                        <input type="text" class="form-control" name="exclude_keywords" placeholder="live,伴奏,remix">
-                        <div class="form-text">包含这些词的歌曲不下载，多个关键字用英文逗号分隔（同时匹配歌名和歌手名）</div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">过滤应用范围</label>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="scope_playlist" id="scope-playlist" value="playlist">
-                            <label class="form-check-label" for="scope-playlist">歌单同步</label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" name="scope_search" id="scope-search" value="search">
-                            <label class="form-check-label" for="scope-search">搜索下载</label>
-                        </div>
-                        <div class="form-text">单首下载不受此限制（尊重用户主动选择）</div>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">单账号每小时下载上限</label>
-                        <input type="number" class="form-control" name="hourly_limit_per_account" min="0" max="10000" value="50">
-                        <div class="form-text">0=不限制；自然小时内单账号成功达上限后切换账号，全部达上限则暂停 30 分钟</div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- 多账号下载模式 -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header"><i class="bi bi-people"></i> 多账号下载模式</div>
-            <div class="card-body">
-                <div class="mb-3">
-                    <label class="form-label">下载模式</label>
-                    <select class="form-select" name="download_mode">
-                        <option value="fallback">接力模式（账号1达额度或失败后切换账号2）</option>
-                        <option value="round_robin">轮询模式（多账号循环下载）</option>
-                    </select>
-                    <div class="form-text mt-1">
-                        <i class="bi bi-info-circle"></i>
-                        接力模式：优先用账号1，达额度或失败才切换；轮询模式：每个任务轮流分配账号。账号顺序在「账号管理」页调整。
-                    </div>
-                </div>
-                <div class="form-check">
-                    <input type="checkbox" class="form-check-input" name="prefer_non_vip" value="true">
-                    <label class="form-check-label">优先使用非VIP账号下载</label>
-                    <div class="form-text">开启后：非VIP歌曲优先用非VIP账号，仅 VIP 歌曲（fee=1）才用 VIP 账号；无可用账号时回退到全部账号</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 自动同步 -->
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header"><i class="bi bi-arrow-repeat"></i> 自动同步</div>
-            <div class="card-body">
-                <div class="row g-3 align-items-center">
-                    <div class="col-md-6">
-                        <div class="form-check">
-                            <input type="checkbox" class="form-check-input" name="auto_sync_enabled" value="true">
-                            <label class="form-check-label">启用定时自动同步</label>
+            <!-- 音质 -->
+            <div class="ui-card">
+                <div class="set-cardhead"><i class="bi bi-soundwave"></i> 音质</div>
+                <div class="set-body">
+                    <div class="set-row set-field">
+                        <div>
+                            <label class="set-label">网易云音质</label>
+                            {# 选项按音质从高到低排列（纯展示秩序，不参与降级逻辑） #}
+                            <select class="ui-select set-input" x-model="form.level_netease">
+                                <option value="sky">沉浸环绕声（需SVIP）</option>
+                                <option value="jymaster">超清母带（需SVIP）</option>
+                                <option value="vivid">臻音全景声（需SVIP）</option>
+                                <option value="dolby">杜比全景声（需SVIP）</option>
+                                <option value="jyeffect">高清臻音（需SVIP）</option>
+                                <option value="hires">Hi-Res（需豪华VIP）</option>
+                                <option value="lossless">无损 FLAC（需黑胶VIP）</option>
+                                <option value="exhigh">极高 320kbps（需会员）</option>
+                                <option value="standard">标准 128kbps MP3</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="set-label">QQ音乐音质</label>
+                            {# hires 与 lossless 同为 FLAC，保留 hires 项避免存量设置显示空白 #}
+                            <select class="ui-select set-input" x-model="form.level_qq">
+                                <option value="jymaster">臻品母带 FLAC 24bit/192kHz（需豪华绿钻）</option>
+                                <option value="hires">无损 FLAC（Hi-Res 档同无损）</option>
+                                <option value="lossless">无损 FLAC（需绿钻）</option>
+                                <option value="ogg640">OGG 640k SQ 无损（需VIP，备选）</option>
+                                <option value="exhigh">320kbps MP3（需登录）</option>
+                                <option value="standard">标准 128kbps MP3</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="set-label">酷狗音乐音质</label>
+                            <select class="ui-select set-input" x-model="form.level_kugou">
+                                <option value="hires">Hi-Res（需豪华VIP）</option>
+                                <option value="lossless">无损 FLAC（需VIP）</option>
+                                <option value="exhigh">320kbps MP3（需登录）</option>
+                                <option value="standard">标准 128kbps MP3</option>
+                            </select>
                         </div>
                     </div>
-                    <div class="col-md-6">
-                        <label class="form-label">抖动延迟（秒）</label>
-                        <input type="number" class="form-control" name="sync_jitter" min="0" max="3600" value="600">
-                        <div class="form-text">触发后随机延迟 0~N 秒再执行，避免精准时刻请求</div>
+                    <label class="set-check">
+                        <span class="ui-check"><input type="checkbox" x-model="form.enable_quality_fallback"></span>
+                        <span class="set-checktext">目标音质不可用时自动降档（回退到更低音质下载）</span>
+                    </label>
+                </div>
+            </div>
+
+            <!-- 多账号 -->
+            <div class="ui-card">
+                <div class="set-cardhead"><i class="bi bi-people"></i> 多账号下载模式</div>
+                <div class="set-body">
+                    <div class="set-field">
+                        <label class="set-label">下载模式</label>
+                        <select class="ui-select set-input" x-model="form.download_mode">
+                            <option value="fallback">接力模式（账号1达额度或失败后切换账号2）</option>
+                            <option value="round_robin">轮询模式（多账号循环下载）</option>
+                        </select>
+                        <div class="set-hint">
+                            <i class="bi bi-info-circle"></i>
+                            接力模式：优先用账号1，达额度或失败才切换；轮询模式：每个任务轮流分配账号。账号顺序在「账号管理」页调整。
+                        </div>
                     </div>
-                    <div class="col-12">
-                        <label class="form-label">同步时间点</label>
-                        <input type="text" class="form-control" name="sync_times" placeholder="03:00,09:00,21:00">
-                        <div class="form-text">多个时间用逗号分隔，格式 HH:MM，每天在这些时间点触发同步</div>
+                    <div class="set-field">
+                        <label class="set-check">
+                            <span class="ui-check"><input type="checkbox" x-model="form.prefer_non_vip"></span>
+                            <span class="set-checktext">优先使用非VIP账号下载
+                                <small>开启后：非VIP歌曲优先用非VIP账号，仅 VIP 歌曲（fee=1）才用 VIP 账号；无可用账号时回退到全部账号</small>
+                            </span>
+                        </label>
+                    </div>
+                    <div class="set-field">
+                        <label class="set-label">单账号每小时下载上限</label>
+                        <input type="number" class="ui-input set-input" x-model="form.hourly_limit_per_account" min="0" max="10000">
+                        <div class="set-hint">0=不限制；自然小时内单账号成功达上限后切换账号，全部达上限则暂停 30 分钟</div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- 保存按钮 -->
-    <div class="col-12">
-        <button type="submit" class="btn btn-primary" id="btn-save-settings">
-            <i class="bi bi-save"></i> 保存设置
-        </button>
-    </div>
+            <!-- 自动同步 -->
+            <div class="ui-card">
+                <div class="set-cardhead"><i class="bi bi-arrow-repeat"></i> 自动同步</div>
+                <div class="set-body">
+                    <label class="set-check set-field">
+                        <span class="ui-check"><input type="checkbox" x-model="form.auto_sync_enabled"></span>
+                        <span class="set-checktext">启用定时自动同步</span>
+                    </label>
+                    <div class="set-row set-field">
+                        <div>
+                            <label class="set-label">同步时间点</label>
+                            <input type="text" class="ui-input set-input" x-model="form.sync_times" placeholder="03:00,09:00,21:00">
+                            <div class="set-hint">多个时间用逗号分隔，格式 HH:MM，每天在这些时间点触发同步</div>
+                        </div>
+                        <div>
+                            <label class="set-label">抖动延迟（秒）</label>
+                            <input type="number" class="ui-input set-input" x-model="form.sync_jitter" min="0" max="3600">
+                            <div class="set-hint">触发后随机延迟 0~N 秒再执行，避免精准时刻请求</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- API 服务（三平台内置服务 + 可选自定义URL；宽屏占满一行） -->
+            <div class="ui-card set-span">
+                <div class="set-cardhead"><i class="bi bi-hdd-network"></i> API 服务</div>
+                <div class="set-body">
+                    <template x-for="svc in serviceList" :key="svc.key">
+                        <div class="set-svc">
+                            <div class="set-svchead" x-text="svc.name"></div>
+                            <!-- 状态徽章 + 详情（3s 轮询；自定义URL模式显示专属徽章） -->
+                            <div class="set-svcstatus">
+                                <span class="ui-badge" :class="svcBadge(svc.key).cls" x-text="svcBadge(svc.key).text"></span>
+                                <span class="set-svcdetail" x-text="svcBadge(svc.key).detail"></span>
+                            </div>
+                            <!-- 内置服务区块（勾选自定义URL后整体锁定禁操作） -->
+                            <div class="set-svcctl" :class="{ 'set-locked': isSvcCustom(svc.key) }">
+                                <label class="set-inlinelabel">端口
+                                    <input type="number" class="ui-input set-port" x-model="form[svc.portKey]"
+                                           min="1024" max="65535"
+                                           :disabled="svcPortLocked(svc.key)" :title="svcPortTitle(svc.key)">
+                                </label>
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form[svc.autoKey]"></span>
+                                    <span class="set-checktext">随程序启动自动启动</span>
+                                </label>
+                                <span class="ui-row-actions">
+                                    {{ ui.btn('启动', 'primary', size='sm', icon='play',
+                                              attrs={':disabled': 'svcBusy(svc.key)',
+                                                     ':class': "{ 'is-loading': services[svc.key].starting }",
+                                                     '@click': 'startSvc(svc.key)'}) }}
+                                    {# 停止属危险操作：uiConfirm danger 二次确认（见 settings.js stopSvc） #}
+                                    {{ ui.btn('停止', 'danger', size='sm', icon='stop',
+                                              attrs={':disabled': 'svcBusy(svc.key)',
+                                                     ':class': "{ 'is-loading': services[svc.key].stopping }",
+                                                     '@click': 'stopSvc(svc.key)'}) }}
+                                </span>
+                            </div>
+                            <!-- 自定义URL：区块外，勾选后不受内置区块禁用影响 -->
+                            <div class="set-customrow">
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form[svc.customKey]"></span>
+                                    <span class="set-checktext">使用自定义API服务URL</span>
+                                </label>
+                                <input type="text" class="ui-input set-url" x-model="form[svc.urlKey]"
+                                       :placeholder="svc.urlPlaceholder" :disabled="!form[svc.customKey]">
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+
+            <!-- 保存（非管理员禁用：window.IS_ADMIN 模板注入 + 后端二次校验） -->
+            <div class="set-savebar set-span">
+                <span class="ui-badge ui-badge-warning" x-show="!isAdmin">仅管理员可修改设置</span>
+                <button type="submit" class="ui-btn ui-btn-primary"
+                        :disabled="saving || loading || !isAdmin"
+                        :class="{ 'is-loading': saving }"
+                        :title="isAdmin ? '' : '仅管理员可修改设置'">
+                    <span class="ui-spinner" x-show="saving"></span>
+                    <i class="bi bi-save" x-show="!saving"></i>
+                    <span x-text="isAdmin ? '保存设置' : '保存设置（仅管理员）'"></span>
+                </button>
+            </div>
+
+        </div>
+    </form>
 </div>
-</form>
+
 <script>
     // is_admin 由 app.py context processor 注入；非管理员禁用保存
     // （后端 PUT /api/settings 亦有 _require_admin 校验，此处只是避免无效提交）
