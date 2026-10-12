@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>登录 - Deen音乐下载器</title>
-    <link href="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css') }}" rel="stylesheet">
     {# Frontend 2.0：独立页引入全局 tokens，ui-card/ui-input/ui-btn 体系可用（CSS 同走 static_v 缓存戳） #}
     <link href="{{ static_v('css/app.css') }}" rel="stylesheet">
@@ -74,14 +73,10 @@
             font-weight: 600;
             color: var(--ui-text);
         }
-        .auth-input { width: 100%; }
-        .auth-card .input-group-text {
-            background: var(--ui-bg);
-            border-color: var(--ui-border);
-            color: var(--ui-text-2);
-            font-size: 13px;
-        }
-        .auth-toggle { height: 34px; }
+        .auth-input { flex: 1; width: 100%; min-width: 0; }
+        /* 密码显隐：ui-input + 独立 ghost 小按钮组成 flex 行 */
+        .auth-inputrow { display: flex; align-items: center; gap: 8px; }
+        .auth-inputrow .ui-btn { flex-shrink: 0; }
         .auth-submit {
             width: 100%;
             height: 38px;
@@ -118,19 +113,15 @@
             <form method="POST" action="{{ url_for('views.login') }}">
                 <div class="auth-field">
                     <label class="auth-label" for="login-username">用户名</label>
-                    <div class="input-group">
-                        <span class="input-group-text"><i class="bi bi-person"></i></span>
-                        <input type="text" id="login-username" class="ui-input auth-input" name="username" autofocus required
-                               placeholder="请输入用户名" value="{{ request.form.username }}">
-                    </div>
+                    <input type="text" id="login-username" class="ui-input auth-input" name="username" autofocus required
+                           placeholder="请输入用户名" value="{{ request.form.username }}">
                 </div>
                 <div class="auth-field">
                     <label class="auth-label" for="login-password">密码</label>
-                    <div class="input-group">
-                        <span class="input-group-text"><i class="bi bi-lock"></i></span>
+                    <div class="auth-inputrow">
                         <input type="password" id="login-password" class="ui-input auth-input" name="password" required
                                placeholder="请输入密码">
-                        <button class="ui-btn ui-btn-secondary auth-toggle" type="button" id="toggle-pwd" tabindex="-1"
+                        <button class="ui-btn ui-btn-ghost" type="button" id="toggle-pwd" tabindex="-1"
                                 aria-label="显示或隐藏密码">
                             <i class="bi bi-eye"></i>
                         </button>

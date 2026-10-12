@@ -1,109 +1,49 @@
-/* 全局样式 */
+/* ============================================================
+   最小 Reset（全站已不加载任何第三方 UI 框架 CSS，
+   此处恢复原第三方 reboot 中 ui- 体系与各页排版依赖的关键基线）
+   ============================================================ */
+*, *::before, *::after { box-sizing: border-box; }
+
 body {
-    background-color: #f5f5f5;
-    font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
-}
-
-.card {
-    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-    border: none;
-}
-
-.card-title {
-    margin-bottom: 0.5rem;
-}
-
-/* 统计卡片 */
-#stats-cards .card-body {
-    padding: 1rem 1.25rem;
-}
-
-#stats-cards h2 {
     margin: 0;
-    font-weight: 700;
+    font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+    line-height: 1.5;
+    color: var(--ui-text);
+    background-color: var(--ui-bg);
 }
 
-/* 任务进度条 */
-.task-item {
-    padding: 0.75rem;
-    border: 1px solid #eee;
-    border-radius: 0.375rem;
-    margin-bottom: 0.5rem;
-    background: #fff;
+h1, h2, h3, h4, h5, h6, p { margin: 0; }
+ul, ol { margin: 0; padding: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+b, strong { font-weight: 600; }
+small { font-size: .875em; }
+img, svg { vertical-align: middle; }
+hr {
+    margin: 1rem 0;
+    border: 0;
+    border-top: 1px solid var(--ui-border);
 }
 
-.task-item .progress {
-    height: 8px;
+/* ---------- 工具类：本站仍需的 Bootstrap utilities 最小等价物 ----------
+   app.js 的 renderStatusbar / AppUI.setSubTab 以 d-none 切换显隐，
+   汉堡按钮与侧栏关闭按钮以 d-lg-none 限定小屏；!important 与
+   Bootstrap 同款，保证压过任何同权重 display 规则 */
+.d-none { display: none !important; }
+
+@media (min-width: 992px) {
+    .d-lg-none { display: none !important; }
 }
 
-/* 表格 */
-.table td {
-    vertical-align: middle;
-}
-
-.badge-status {
-    font-size: 0.8em;
-}
-
-/* 平台徽章（我的歌单列表） */
-.badge-platform {
-    font-size: 0.7rem;
-    font-weight: 500;
-    vertical-align: middle;
-}
-
-/* 加载动画 */
-.loading-spinner {
-    display: inline-block;
-    width: 1rem;
-    height: 1rem;
-    border: 2px solid #ddd;
-    border-top-color: #666;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-    to { transform: rotate(360deg); }
-}
-
-/* 发现页卡片网格 */
-.discover-card {
-    cursor: default;
-    transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.discover-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-}
-
-.discover-cover {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    object-fit: cover;
-    background: #eee;
-}
-
-.discover-cover-placeholder {
-    width: 100%;
-    aspect-ratio: 1 / 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-    color: #adb5bd;
-    font-size: 2.5rem;
-}
-
-.discover-card .card-title {
-    font-size: 0.85rem;
-    font-weight: 600;
-}
-
-.discover-card .card-footer {
-    background: transparent;
-    border-top: 1px solid #f0f0f0;
+/* <noscript> 提示条（JS 被禁用时显示于页面顶部） */
+.noscript-tip {
+    padding: 8px 14px;
+    background: rgba(245, 158, 11, .12);
+    border-bottom: 1px solid rgba(245, 158, 11, .45);
+    color: #b45309;
+    font-size: 12px;
+    text-align: center;
 }
 
 /* ============================================================
@@ -121,16 +61,64 @@ body {
     --statusbar-bg: #f8f9fa;
 }
 
-/* 侧边栏：小屏为 offcanvas 抽屉（沿用 Bootstrap offcanvas-lg 默认行为，
-   仅借 CSS 变量定制抽屉宽度与深色底），大屏常驻固定（见下方 @media） */
+/* 侧边栏：小屏默认移出屏幕左侧，由 Alpine 加 .open 抽出（base.html
+   x-data="{sidebar:false}"；遮罩 .sidebar-backdrop 同步显隐）；
+   桌面（≥992px）transform 归零，常驻固定、不受 sidebar 状态影响 */
 .app-sidebar {
-    --bs-offcanvas-width: var(--sidebar-width);
-    --bs-offcanvas-bg: var(--sidebar-bg);
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: var(--sidebar-width);
+    z-index: 1030;
     display: flex;
     flex-direction: column;
     padding: 0;
     background-color: var(--sidebar-bg);
     color: var(--sidebar-text);
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+}
+
+.app-sidebar.open {
+    transform: translateX(0);
+}
+
+@media (min-width: 992px) {
+    .app-sidebar {
+        transform: none;
+        transition: none;
+    }
+}
+
+/* 小屏抽屉遮罩：点击关闭；桌面端强制隐藏（x-show 移除内联 display 后仍不显示） */
+.sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1025;
+    background: rgba(15, 20, 30, .5);
+}
+
+@media (min-width: 992px) {
+    .sidebar-backdrop { display: none; }
+}
+
+/* 小屏抽屉关闭按钮（原 bootstrap btn-close 的替代，位于品牌行右侧） */
+.sidebar-close {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: rgba(245, 247, 250, .7);
+    font-size: 20px;
+    line-height: 1;
+    padding: 2px 6px;
+    cursor: pointer;
+    border-radius: var(--ui-r-s);
+}
+
+.sidebar-close:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, .08);
 }
 
 .sidebar-brand {
@@ -189,24 +177,6 @@ body {
 @media (min-width: 992px) {
     .app-main {
         margin-left: var(--sidebar-width);
-    }
-}
-
-/* 大屏：offcanvas-lg 以内联块呈现，覆盖为常驻固定侧栏。
-   BS 5.3.2 对 lg 下的 .offcanvas-lg 写死了 background-color:transparent!important，
-   因此这里的背景必须带 !important 才能生效 */
-@media (min-width: 992px) {
-    .app-sidebar {
-        position: fixed;
-        top: 0;
-        bottom: 0;
-        left: 0;
-        width: var(--sidebar-width);
-        visibility: visible !important;
-        background-color: var(--sidebar-bg) !important;
-        transform: none !important;
-        border: 0;
-        z-index: 1030;
     }
 }
 
@@ -327,8 +297,8 @@ body {
 /* ============================================================
    Frontend 2.0 设计体系（UI-02）
    ============================================================
-   本段为「追加层」：旧规则全部保留（未迁移页面仍依赖 Bootstrap
-   原生组件类），新体系统一使用 ui- 前缀类名，互不干扰。
+   新体系统一使用 ui- 前缀类名；文件头部为最小 Reset / 工具类 /
+   布局骨架（无 Bootstrap），两段衔接后为全站唯一样式来源。
    ============================================================ */
 
 /* ---------- Design Tokens ---------- */
@@ -384,12 +354,8 @@ body {
 /* Alpine x-cloak：初始化前隐藏受控元素 */
 [x-cloak] { display: none !important; }
 
-/* ---------- 布局观感刷新（三区骨架与 id/class 契约不变） ---------- */
-body {
-    background-color: var(--ui-bg);
-    color: var(--ui-text);
-}
-
+/* ---------- 布局观感刷新（三区骨架与 id/class 契约不变；body 底色/字色
+   已并入文件头部最小 Reset 的 body 规则） ---------- */
 .sidebar-brand {
     color: #f5f7fa;
     border-bottom: 1px solid rgba(255, 255, 255, .06);
@@ -923,7 +889,8 @@ body {
     white-space: nowrap;
 }
 
-/* ---------- 顶栏用户菜单（Alpine 开合，替代 bootstrap dropdown） ---------- */
+/* ---------- 顶栏用户菜单（原生 details/summary 换皮，开合零依赖；
+   Alpine 仅增强 click-outside 与 ESC 关闭） ---------- */
 .ui-usermenu {
     position: relative;
 }
@@ -941,7 +908,10 @@ body {
     font-size: 13px;
     cursor: pointer;
     transition: background-color .15s, border-color .15s;
+    list-style: none;  /* 隐藏 summary 默认三角（标准属性） */
 }
+
+.ui-usermenu-btn::-webkit-details-marker { display: none; }  /* Safari/Chrome */
 
 .ui-usermenu-btn:hover {
     background: var(--ui-bg);
@@ -954,7 +924,7 @@ body {
     transition: transform .15s;
 }
 
-.ui-usermenu-btn[aria-expanded="true"] .ui-usermenu-caret {
+.ui-usermenu[open] .ui-usermenu-caret {
     transform: rotate(180deg);
 }
 

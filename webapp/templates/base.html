@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Deen音乐下载器{% endblock %}</title>
-    <link href="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.min.css') }}" rel="stylesheet">
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css') }}" rel="stylesheet">
     {# Frontend 2.0：CSS 也走 static_v 缓存戳（与 JS 一致，改样式即失效缓存） #}
     <link href="{{ static_v('css/app.css') }}" rel="stylesheet">
@@ -16,14 +15,20 @@
     {# Frontend 2.0 UI 宏（base 自身可见；子模板 block 内使用需在页面顶部自行 import —— Jinja import 作用域为模块级） #}
     {% import "macros/ui.html" as ui %}
 </head>
-<body>
-    <!-- 侧边栏：小屏 offcanvas 抽屉（Bootstrap offcanvas-lg 机制不变），大屏常驻 -->
-    <aside class="offcanvas-lg offcanvas-start app-sidebar" id="appSidebar" tabindex="-1" aria-label="主导航">
+<body x-data="{ sidebar: false }" @keydown.escape.window="sidebar = false">
+    <noscript>
+        <div class="noscript-tip">
+            JavaScript 未启用：小屏侧栏抽屉与部分交互不可用；页面导航链接与退出登录仍可直接点击使用。
+        </div>
+    </noscript>
+    <!-- 侧边栏：桌面（≥992px）CSS 常驻固定，不受 sidebar 状态影响；
+         小屏为 Alpine 抽屉（汉堡开 / 遮罩与 ESC 关），无 Alpine 时桌面端完全可用 -->
+    <aside class="app-sidebar" id="appSidebar" :class="{ open: sidebar }" aria-label="主导航">
         <a href="{{ url_for('views.dashboard') }}" class="sidebar-brand">
             <i class="bi bi-music-note-beamed"></i>
             <span>Deen音乐下载器</span>
             <small>v{{ version }}</small>
-            <button type="button" class="btn-close btn-close-white d-lg-none ms-auto" data-bs-dismiss="offcanvas" aria-label="关闭菜单"></button>
+            <button type="button" class="sidebar-close d-lg-none" @click.stop="sidebar = false" aria-label="关闭菜单">&times;</button>
         </a>
         <nav class="sidebar-nav">
             <a href="{{ url_for('views.dashboard') }}" class="sidebar-item {% if active_page == 'dashboard' %}active{% endif %}">
@@ -52,9 +57,12 @@
         </nav>
     </aside>
 
+    <!-- 小屏抽屉遮罩：桌面端由 CSS 强制隐藏 -->
+    <div class="sidebar-backdrop" x-cloak x-show="sidebar" @click="sidebar = false" aria-hidden="true"></div>
+
     <div class="app-main">
         <header class="app-topbar">
-            <button class="topbar-burger d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#appSidebar" aria-label="菜单">
+            <button class="topbar-burger d-lg-none" type="button" @click="sidebar = true" aria-label="菜单">
                 <i class="bi bi-list"></i>
             </button>
             <nav class="app-breadcrumb" aria-label="breadcrumb">
@@ -64,23 +72,24 @@
             </nav>
             <div class="topbar-right">
                 {% if current_user %}
-                {# 用户菜单：Alpine 实现开合（bootstrap.bundle 仍加载，但其 dropdown data-api 不再被使用） #}
-                <div class="ui-usermenu" x-data="{ open: false }"
-                     @click.outside="open = false"
-                     @keydown.escape.window="open = false">
-                    <button type="button" class="ui-usermenu-btn" @click="open = !open"
-                            aria-haspopup="menu" :aria-expanded="open.toString()">
+                {# 用户菜单：原生 details/summary 换皮 —— 开合零依赖（无 JS 时菜单
+                   常驻 DOM 且可正常打开，退出登录链接可达）；Alpine 仅增强
+                   click-outside 与 ESC 关闭，加载失败时这些增强静默失效 #}
+                <details class="ui-usermenu"
+                         @click.outside="$el.open = false"
+                         @keydown.escape.window="$el.open = false">
+                    <summary class="ui-usermenu-btn" aria-haspopup="menu">
                         <i class="bi bi-person-circle"></i>
                         <span>{{ current_user.username }}</span>
                         {% if current_user.is_admin %}<span class="ui-badge ui-badge-warning">管理员</span>{% endif %}
                         <i class="bi bi-chevron-down ui-usermenu-caret"></i>
-                    </button>
-                    <div class="ui-usermenu-menu" x-cloak x-show="open" style="display: none" role="menu">
+                    </summary>
+                    <div class="ui-usermenu-menu" role="menu">
                         <a class="ui-usermenu-item" href="{{ url_for('views.logout') }}" role="menuitem">
                             <i class="bi bi-box-arrow-right"></i> 退出登录
                         </a>
                     </div>
-                </div>
+                </details>
                 {% endif %}
             </div>
         </header>
@@ -98,10 +107,8 @@
     {# 全局提示容器：showToast（app.js）向内写入 .ui-toast 结构并自动消失 #}
     <div class="ui-toast-wrap" id="global-toast" aria-live="polite" aria-atomic="false"></div>
 
-    {# 脚本顺序契约：bootstrap.bundle（未迁移页面的 Modal/Tab/Offcanvas 仍依赖）
-       → alpine(defer，解析完成后执行) → app.js（注册 alpine:init / 全局工具）
-       → 各页 block scripts #}
-    <script src="{{ url_for('static', filename='vendor/bootstrap/5.3.2/bootstrap.bundle.min.js') }}"></script>
+    {# 脚本顺序契约：alpine(defer，解析完成后执行) → app.js（注册 alpine:init /
+       全局工具）→ 各页 block scripts；全站交互均为 Alpine/原生 JS，无 bootstrap #}
     <script defer src="{{ static_v('vendor/alpine/3.14.9/alpine.min.js') }}"></script>
     <script src="{{ static_v('js/app.js') }}"></script>
     {% block scripts %}{% endblock %}

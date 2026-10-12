@@ -4,12 +4,7 @@
 // 签名兼容旧调用 (msg, title)；kind 可选 'info'|'success'|'warning'|'error'
 function showToast(msg, title = "提示", kind = "info") {
     const wrap = document.getElementById("global-toast");
-    // 容器不是新版 ui-toast-wrap 时走旧 bootstrap toast 兜底（防御性，
-    // 当前所有页面均经 base.html 提供新容器）
-    if (!wrap || !wrap.classList.contains("ui-toast-wrap")) {
-        _showToastLegacy(msg, title);
-        return;
-    }
+    if (!wrap) return;  // 无容器（异常页面）时静默跳过
     const el = document.createElement("div");
     el.className = "ui-toast" + (kind !== "info" ? " ui-toast-" + kind : "");
     el.setAttribute("role", "status");
@@ -45,17 +40,6 @@ function showToast(msg, title = "提示", kind = "info") {
         requestAnimationFrame(() => el.classList.add("ui-toast-show"))
     );
     setTimeout(dismiss, 3000);
-}
-
-// 旧版 bootstrap toast 兜底路径（结构依赖 #toast-title/#toast-body）
-function _showToastLegacy(msg, title) {
-    const toastEl = document.getElementById("global-toast");
-    const titleEl = document.getElementById("toast-title");
-    const bodyEl = document.getElementById("toast-body");
-    if (!toastEl || !titleEl || !bodyEl || typeof bootstrap === "undefined") return;
-    titleEl.textContent = title;
-    bodyEl.textContent = msg;
-    bootstrap.Toast.getOrCreateInstance(toastEl, { delay: 3000 }).show();
 }
 
 // API 请求封装（默认 15 秒超时，401 自动跳转登录；options.timeout 可覆盖）
@@ -128,15 +112,6 @@ function escapeHtml(str) {
         .replace(/'/g, "&#39;");
 }
 
-// 文件大小格式化
-function formatSize(bytes) {
-    if (!bytes) return "--";
-    if (bytes < 1024) return bytes + " B";
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
-    if (bytes < 1024 * 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
-    return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
-}
-
 // ============================================================
 // 音质档位中文名映射（TASK-04b）
 // ============================================================
@@ -174,28 +149,6 @@ window.CACHED_SETTINGS = window.CACHED_SETTINGS || {};
 function get_current_quality_name(platform) {
     const lv = window.CACHED_SETTINGS["level_" + platform] || "";
     return lv ? get_quality_name(lv) : "";
-}
-
-// 时长格式化
-function formatDuration(ms) {
-    if (!ms) return "--";
-    const s = Math.floor(ms / 1000);
-    const m = Math.floor(s / 60);
-    return m + ":" + String(s % 60).padStart(2, "0");
-}
-
-// 状态徽章
-function statusBadge(status) {
-    const map = {
-        success: '<span class="badge bg-success">成功</span>',
-        failed: '<span class="badge bg-danger">失败</span>',
-        skipped: '<span class="badge bg-secondary">已下载</span>',
-        pending: '<span class="badge bg-warning">等待中</span>',
-        downloading: '<span class="badge bg-primary">下载中</span>',
-        paused: '<span class="badge bg-secondary">已暂停</span>',
-        done: '<span class="badge bg-success">完成</span>',
-    };
-    return map[status] || '<span class="badge bg-secondary">' + status + '</span>';
 }
 
 // ============================================================
@@ -315,8 +268,8 @@ if (document.readyState === "loading") {
 // ============================================================
 // Frontend 2.0 组件层（UI-02）
 // ============================================================
-// 本段只增不改不删：上方既有函数被未迁移页面依赖，保留至迁移完成。
-// 新函数自本包起是新页面的唯一标准（format 家族以 fmt* 为准）。
+// 迁移已全部完成：本段为全站唯一样式的组件与工具层（ui-* 结构 +
+// fmt* 格式化家族），旧零消费者函数已随 Bootstrap 一并移除。
 
 // ---- Alpine 全局 store：模态框开关（macros/ui.html 的 ui.modal 约定）----
 // 用法：页面 Alpine 表达式内 `$store.modals.<id> = true/false`，
@@ -427,7 +380,7 @@ window.withButtonLoading = async function(btn, asyncFn) {
     }
 };
 
-// ---- 统一 format 家族（新页面唯一标准；旧 formatSize/formatDuration 保留不动）----
+// ---- 统一 format 家族（全站唯一标准）----
 
 // 时长（毫秒）→ 补零 mm:ss；满 1 小时进位为 h:mm:ss；无效输入返回 "--"
 function fmtDurationMs(ms) {

@@ -2,7 +2,6 @@
 
 接口列表（仅列常用主路径；完整路由见本文件 @api_bp.route 定义）：
 - GET    /api/playlists           获取关注的歌单列表
-- GET    /api/toplists            获取网易云所有官方榜单（供添加选择）
 - POST   /api/playlists           添加歌单（支持分享链接自动解析 ID）
 - PUT    /api/playlists/<pid>     更新歌单设置（启用/limit）
 - DELETE /api/playlists/<pid>     取消关注
@@ -51,7 +50,6 @@ from auth import current_user
 from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES
 from core.providers.base import MusicProvider
 from core.organizer import scan_directory, group_duplicates
-from core.providers.netease.client import OFFICIAL_TOPLISTS
 from core.providers.netease.parse_links import parse_playlist_id
 from core.providers.kugou import bridge as kugou_bridge
 from core.providers.kugou.client import register_gcid
@@ -302,21 +300,6 @@ def get_playlists():
     """获取已关注的歌单列表"""
     playlists = Playlist.query.order_by(Playlist.created_at).all()
     return jsonify({"code": 0, "data": [p.to_dict() for p in playlists]})
-
-
-@api_bp.route("/toplists")
-def get_toplists():
-    """获取网易云所有官方榜单（从 API 实时拉取）"""
-    try:
-        client = _get_client()
-        lists = client.get_all_toplists()
-        if lists:
-            return jsonify({"code": 0, "data": lists})
-    except Exception as e:
-        logger.warning("从 API 获取榜单失败，返回本地常驻列表: %s", e)
-    # 回退到本地常驻列表
-    data = [{"id": k, "name": v, "description": "", "update_frequency": ""} for k, v in OFFICIAL_TOPLISTS.items()]
-    return jsonify({"code": 0, "data": data})
 
 
 @api_bp.route("/playlists", methods=["POST"])
