@@ -1,200 +1,276 @@
 {% extends "base.html" %}
+{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{% import "macros/ui.html" as ui %}
 {% block title %}账号管理 - Deen音乐下载器{% endblock %}
 {% block content %}
 <style>
-#accounts-cards { margin: 0; }
-.account-card-col { padding: 0.25rem; box-sizing: border-box; flex: 0 0 100%; }
-@media (min-width: 768px) { .account-card-col { flex: 0 0 25%; } }
-@media (min-width: 992px) { .account-card-col { flex: 0 0 16.66666667%; } }
-.account-card { border: 1px solid var(--bs-border-color, #dee2e6); border-radius: 6px; transition: box-shadow 0.15s; width: 100%; }
-.account-card:hover { box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
-.account-card .card-body { padding: 6px 8px; }
+    /* 账号页局部样式（acct- 前缀，页面自治；ui- 组件层不改动） */
+    .acct-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+    .acct-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
+    .acct-headactions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .acct-hint { padding: 10px 12px; margin-bottom: 14px; font-size: 12px; color: var(--ui-text-2); background: rgba(59, 130, 246, .07); border: 1px solid rgba(59, 130, 246, .25); border-radius: var(--ui-r-s); }
+    .acct-platpill { display: inline-flex; gap: 2px; padding: 2px; margin-bottom: 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 999px; }
+    .acct-plat-btn { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; padding: 5px 14px; border-radius: 999px; font-size: 13px; color: var(--ui-text-2); cursor: pointer; transition: background-color .15s, color .15s; }
+    .acct-plat-btn:hover { color: var(--ui-text); }
+    .acct-plat-btn.active { background: var(--ui-primary); color: #fff; }
+    .acct-grouphead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .acct-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; }
+    .acct-card { border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); background: var(--ui-surface); padding: 10px 12px; transition: box-shadow .15s; }
+    .acct-card:hover { box-shadow: var(--ui-shadow-1); }
+    .acct-cardname { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; min-width: 0; }
+    .acct-cardname .acct-name { font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .acct-meta { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 12px; color: var(--ui-text-2); flex-wrap: wrap; }
+    .acct-text-ok { color: var(--ui-success); }
+    .acct-text-danger { color: var(--ui-danger); }
+    .acct-switch { position: relative; display: inline-block; width: 34px; height: 20px; }
+    .acct-switch input { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; margin: 0; cursor: pointer; opacity: 0; }
+    .acct-track { position: absolute; inset: 0; background: var(--ui-border); border-radius: 999px; transition: background-color .15s; }
+    .acct-track::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; box-shadow: var(--ui-shadow-1); transition: transform .15s; }
+    .acct-switch input:checked + .acct-track { background: var(--ui-primary); }
+    .acct-switch input:checked + .acct-track::before { transform: translateX(14px); }
+    .acct-label { display: block; margin-bottom: 12px; font-size: 13px; color: var(--ui-text); }
+    .acct-label .ui-select, .acct-label .ui-input { display: block; width: 100%; margin-top: 6px; }
+    .acct-label textarea.ui-input { height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; font-family: inherit; }
+    .acct-formhint { margin: -6px 0 12px; font-size: 12px; color: var(--ui-text-3); }
+    .acct-qrbtns { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; }
+    .acct-qrbtns .ui-btn { justify-content: flex-start; }
+    .acct-qrpanel { margin-top: 8px; text-align: center; }
+    .acct-qrpanel img { max-width: 200px; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); background: #fff; }
+    .acct-qrstatus { margin-top: 6px; font-size: 12px; color: var(--ui-text-2); }
+    .acct-qrstatus.is-success { color: var(--ui-success); }
+    .acct-qrstatus.is-error { color: var(--ui-danger); }
+    .acct-tablewrap { overflow-x: auto; }
 </style>
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h4 class="mb-0"><i class="bi bi-people"></i> 账号管理</h4>
-    <div>
-        <button class="btn btn-outline-secondary btn-sm" id="btn-import-accounts">
-            <i class="bi bi-upload"></i> 导入
-        </button>
-        {% if current_user.is_admin %}
-        <button class="btn btn-outline-secondary btn-sm" id="btn-export-accounts">
-            <i class="bi bi-download"></i> 导出
-        </button>
-        {% endif %}
-        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#add-account-modal">
-            <i class="bi bi-plus-circle"></i> 添加账号
-        </button>
-        <input type="file" id="import-file-input" accept=".json" hidden>
+
+<div x-data="accountsPage()" x-cloak>
+    <!-- 页头：标题 + 导入 / 添加账号（管理员专属入口由模板条件渲染，普通用户不输出） -->
+    <div class="acct-pagehead">
+        <h4><i class="bi bi-person-gear"></i> 账号管理</h4>
+        <div class="acct-headactions">
+            {{ ui.btn('导入', 'secondary', size='sm', icon='upload', attrs={'@click': 'pickImportFile()'}) }}
+            {% if current_user.is_admin %}
+            {{ ui.btn('导出', 'secondary', size='sm', icon='download', attrs={'@click': 'exportClick()'}) }}
+            {% endif %}
+            {{ ui.btn('添加账号', 'primary', icon='plus-circle', attrs={'@click': 'openAdd()'}) }}
+            <input type="file" x-ref="importFile" accept=".json" hidden @change="onImportFile($event)">
+        </div>
     </div>
-</div>
 
-<!-- 下载模式提示 -->
-<div class="alert alert-info">
-    <i class="bi bi-info-circle"></i>
-    下载模式在「设置」页配置：
-    <strong>接力模式</strong>（账号1达额度或失败后切换账号2） /
-    <strong>轮询模式</strong>（多账号循环下载）。
-    会员到期时间在添加/编辑/测试账号时自动刷新（酷狗音乐 API 未提供到期时间字段，酷狗账号该项显示「酷狗未提供」属正常）。
-</div>
+    <!-- 下载模式提示 -->
+    <div class="acct-hint">
+        <i class="bi bi-info-circle"></i>
+        下载模式在「设置」页配置：<strong>接力模式</strong>（账号1达额度或失败后切换账号2）/ <strong>轮询模式</strong>（多账号循环下载）。
+        会员到期时间在添加/编辑/测试账号时自动刷新（酷狗音乐 API 未提供到期时间字段，酷狗账号该项显示「酷狗未提供」属正常）。
+    </div>
 
-<!-- 平台分页 Tab -->
-<ul class="nav nav-tabs mb-3" id="platform-tabs" role="tablist">
-    <li class="nav-item" role="presentation">
-        <button class="nav-link active" data-platform="all" data-bs-toggle="tab">全部 <span class="badge bg-secondary" id="count-all">0</span></button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" data-platform="netease" data-bs-toggle="tab">网易云 <span class="badge bg-secondary" id="count-netease">0</span></button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" data-platform="qq" data-bs-toggle="tab">QQ音乐 <span class="badge bg-secondary" id="count-qq">0</span></button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" data-platform="kugou" data-bs-toggle="tab">酷狗音乐 <span class="badge bg-secondary" id="count-kugou">0</span></button>
-    </li>
-</ul>
+    <!-- 平台过滤分段（全部/网易云/QQ/酷狗 + 计数徽章） -->
+    <div class="acct-platpill" role="group" aria-label="平台切换">
+        <template x-for="t in platformTabs" :key="t.key">
+            <button type="button" class="acct-plat-btn"
+                    :class="{ active: platform === t.key }"
+                    :aria-pressed="platform === t.key ? 'true' : 'false'"
+                    @click="switchPlatform(t.key)">
+                <span x-text="t.name"></span>
+                <span class="ui-badge" :class="platform === t.key ? 'ui-badge-info' : 'ui-badge-muted'"
+                      x-text="counts[t.key]"></span>
+            </button>
+        </template>
+    </div>
 
-<!-- 全部标签页：卡片视图（只读） -->
-<div id="accounts-card-view" style="display:none;">
-    <div id="accounts-cards" class="row g-2"></div>
-</div>
+    <!-- 加载中 / 空态（无账号引导添加） -->
+    <div x-show="loading">
+        {{ ui.empty('hourglass-split', '加载中…') }}
+    </div>
+    <div x-show="!loading && !accounts.length">
+        {% set acct_empty_action %}
+        {{ ui.btn('添加账号', 'primary', icon='plus-circle', attrs={'@click': 'openAdd()'}) }}
+        {% endset %}
+        {{ ui.empty('person-plus', '暂无账号，先添加一个吧', acct_empty_action) }}
+    </div>
 
-<!-- 平台标签页：表格视图（可编辑） -->
-<div id="accounts-table-view">
-    <div class="card">
-        <div class="card-body">
-            <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
+    <div x-show="!loading && accounts.length">
+        <!-- 「全部」：卡片只读视图（平台分组 / VIP / 到期 / 启停状态 / 月额度） -->
+        <div x-show="platform === 'all'">
+            <template x-for="g in platformGroups" :key="g.platform">
+                <div style="margin-bottom: 14px;">
+                    <div class="acct-grouphead">
+                        <span class="ui-badge" :class="platBadgeCls(g.platform)" x-text="platName(g.platform)"></span>
+                        <span class="ui-text-3" style="font-size: 12px" x-text="'共 ' + g.items.length + ' 个账号'"></span>
+                    </div>
+                    <div class="acct-cards">
+                        <template x-for="a in g.items" :key="a.id">
+                            <div class="acct-card">
+                                <div class="acct-cardname">
+                                    <span class="ui-badge" :class="platBadgeCls(a.platform)" x-text="a.platform_name || platName(a.platform)"></span>
+                                    <span class="acct-name ui-truncate" x-text="a.name" :title="a.name"></span>
+                                </div>
+                                <div class="acct-meta">
+                                    <span class="ui-badge" :class="a.vip_type > 0 ? 'ui-badge-warning' : 'ui-badge-muted'" x-text="a.vip_text"></span>
+                                    <span>到期</span>
+                                    <span :class="expireMeta(a).cls" x-text="expireMeta(a).text"></span>
+                                </div>
+                                <div class="acct-meta">
+                                    <span :class="a.enabled ? 'acct-text-ok' : 'ui-text-3'" x-text="a.enabled ? '● 已启用' : '○ 已禁用'"></span>
+                                    <span class="ui-text-3">|</span>
+                                    <span :class="quotaCls(a)" x-text="quotaText(a)"></span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- 单平台：表格可编辑视图（排序/启停/测试/编辑/删除） -->
+        <div class="ui-card" x-show="platform !== 'all'">
+            <div class="ui-card-body acct-tablewrap">
+                <table class="ui-table">
                     <thead>
                         <tr>
-                            <th width="70">排序</th>
-                            <th width="50">启用</th>
+                            <th style="width:70px">排序</th>
+                            <th style="width:50px">启用</th>
                             <th>平台</th>
                             <th>别名</th>
                             <th>昵称</th>
-                            <th width="100">会员类型</th>
-                            <th width="160">会员到期</th>
-                            <th width="180">本月已下载</th>
-                            <th width="150">上次校验</th>
-                            <th width="200">操作</th>
+                            <th style="width:100px">会员类型</th>
+                            <th style="width:120px">会员到期</th>
+                            <th style="width:110px">本月已下载</th>
+                            <th style="width:150px">上次校验</th>
+                            <th style="width:210px">操作</th>
                         </tr>
                     </thead>
-                    <tbody id="account-tbody">
-                        <tr><td colspan="10" class="text-center text-muted">加载中...</td></tr>
+                    <tbody>
+                        <tr class="ui-table-empty" x-show="loading"><td colspan="10">加载中…</td></tr>
+                        <tr class="ui-table-empty" x-show="!loading && !filteredAccounts.length"><td colspan="10">该平台暂无账号，点击右上角添加</td></tr>
+                        <template x-for="(a, idx) in filteredAccounts" :key="a.id">
+                            <tr x-show="!loading">
+                                <td>
+                                    <span class="ui-row-actions">
+                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
+                                                :disabled="idx === 0" title="上移" aria-label="上移"
+                                                @click="moveAccount(a, 'up')"><i class="bi bi-arrow-up"></i></button>
+                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
+                                                :disabled="idx === filteredAccounts.length - 1" title="下移" aria-label="下移"
+                                                @click="moveAccount(a, 'down')"><i class="bi bi-arrow-down"></i></button>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="acct-switch">
+                                        <input type="checkbox" role="switch" :checked="a.enabled"
+                                               :aria-label="'启用：' + a.name"
+                                               @change="toggleEnabled(a, $event.target.checked)">
+                                        <span class="acct-track"></span>
+                                    </span>
+                                </td>
+                                <td><span class="ui-badge" :class="platBadgeCls(a.platform)" x-text="a.platform_name || platName(a.platform)"></span></td>
+                                <td x-text="a.name"></td>
+                                <td>
+                                    <span x-show="a.nickname" x-text="a.nickname"></span>
+                                    <span class="ui-text-3" x-show="!a.nickname">未获取</span>
+                                </td>
+                                <td><span class="ui-badge" :class="a.vip_type > 0 ? 'ui-badge-warning' : 'ui-badge-muted'" x-text="a.vip_text"></span></td>
+                                <td><span :class="expireMeta(a).cls" x-text="expireMeta(a).text"></span></td>
+                                <td><strong :class="quotaCls(a)" x-text="quotaText(a)"></strong></td>
+                                <td><span class="ui-text-3" style="font-size: 12px" x-text="a.last_check_at || '从未校验'"></span></td>
+                                <td>
+                                    <span class="ui-row-actions">
+                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
+                                                :disabled="testBusy.has(a.id)" :class="{ 'is-loading': testBusy.has(a.id) }"
+                                                title="测试登录" @click="testLogin(a)">
+                                            <i class="bi bi-check2-all"></i> 测试
+                                        </button>
+                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary" title="编辑" @click="openEdit(a)">
+                                            <i class="bi bi-pencil"></i> 编辑
+                                        </button>
+                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-danger" title="删除" aria-label="删除" @click="confirmDelete(a)">
+                                            <i class="bi bi-trash"></i>
+                                        </button>
+                                    </span>
+                                </td>
+                            </tr>
+                        </template>
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
-</div>
 
-<!-- 添加账号弹窗 -->
-<div class="modal fade" id="add-account-modal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-plus-circle"></i> 添加账号</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label">平台</label>
-                    <select class="form-select" id="add-platform">
-                        <option value="netease" selected>网易云</option>
-                        <option value="qq">QQ音乐</option>
-                        <option value="kugou">酷狗音乐</option>
-                    </select>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">账号别名</label>
-                    <input type="text" class="form-control" id="add-name" placeholder="如：主账号">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Cookie</label>
-                    <textarea class="form-control" id="add-cookie" rows="3" placeholder=""></textarea>
-                    <div class="form-text" id="add-cookie-hint">网易云：浏览器登录 music.163.com → F12 → Application → Cookies → 复制 MUSIC_U</div>
-                </div>
-                <!-- 网易云扫码登录（仅 netease 平台显示） -->
-                <div class="mb-3 d-none" id="ncm-qr-section">
-                    <button type="button" class="btn btn-outline-danger btn-sm" id="btn-ncm-qr">
-                        <i class="bi bi-qr-code"></i> 扫码登录（网易云APP扫码，自动填入 Cookie）
-                    </button>
-                    <div id="ncm-qr-panel" class="text-center mt-2 d-none">
-                        <img id="ncm-qr-img" alt="网易云登录二维码" class="img-thumbnail" style="max-width:200px;">
-                        <div class="form-text" id="ncm-qr-status">请使用网易云音乐APP扫描二维码登录</div>
-                    </div>
-                </div>
-                <!-- 酷狗扫码登录（仅 kugou 平台显示） -->
-                <div class="mb-3 d-none" id="kugou-qr-section">
-                    <button type="button" class="btn btn-outline-success btn-sm" id="btn-kugou-qr">
-                        <i class="bi bi-qr-code"></i> 扫码登录（酷狗APP扫码，自动填入 Cookie）
-                    </button>
-                    <div id="kugou-qr-panel" class="text-center mt-2 d-none">
-                        <img id="kugou-qr-img" alt="酷狗登录二维码" class="img-thumbnail" style="max-width:200px;">
-                        <div class="form-text" id="kugou-qr-status">请使用酷狗音乐APP扫描二维码登录</div>
-                    </div>
-                </div>
-                <!-- QQ音乐扫码登录（仅 qq 平台显示，QQ/微信二选一） -->
-                <div class="mb-3 d-none" id="qq-qr-section">
-                    <div class="btn-group btn-group-sm" role="group">
-                        <button type="button" class="btn btn-outline-success" id="btn-qq-qr">
-                            <i class="bi bi-qr-code"></i> QQ扫码登录
-                        </button>
-                        <button type="button" class="btn btn-outline-success" id="btn-qq-wx-qr">
-                            <i class="bi bi-wechat"></i> 微信扫码登录
-                        </button>
-                    </div>
-                    <div id="qq-qr-panel" class="text-center mt-2 d-none">
-                        <img id="qq-qr-img" alt="QQ音乐登录二维码" class="img-thumbnail" style="max-width:200px;">
-                        <div class="form-text" id="qq-qr-status">请扫描二维码登录</div>
-                    </div>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">月度总额度（0=不限制）</label>
-                    <input type="number" class="form-control" id="add-quota" value="0" min="0">
-                    <div class="form-text">设为 0 表示不限制；设置后达到额度会自动切换下一个账号</div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button class="btn btn-primary" id="btn-add-account">添加</button>
-            </div>
-        </div>
-    </div>
-</div>
+    {# 添加账号弹窗：平台联动 placeholder/提示文案；三平台扫码登录区（网易云 1 键 /
+       酷狗 1 键 / QQ+微信双按钮）；轮询状态由 qr 状态机驱动（等待/轮询中/成功/拒绝/过期） #}
+    {% set add_body %}
+    <label class="acct-label">平台
+        <select class="ui-select" @change="onAddPlatformChange($event.target.value)">
+            <template x-for="p in addPlatformOptions" :key="p.key">
+                <option :value="p.key" :selected="addForm.platform === p.key" x-text="p.name"></option>
+            </template>
+        </select>
+    </label>
+    <label class="acct-label">账号别名
+        <input type="text" class="ui-input" x-model="addForm.name" placeholder="如：主账号">
+    </label>
+    <label class="acct-label">Cookie
+        <textarea class="ui-input" rows="3" x-model="addForm.cookie"
+                  :placeholder="addHint(addForm.platform).placeholder"></textarea>
+    </label>
+    <div class="acct-formhint" x-text="addHint(addForm.platform).hint"></div>
 
-<!-- 编辑账号弹窗 -->
-<div class="modal fade" id="edit-account-modal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title"><i class="bi bi-pencil"></i> 编辑账号</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <input type="hidden" id="edit-id">
-                <div class="mb-3">
-                    <label class="form-label">平台</label>
-                    <input type="text" class="form-control" id="edit-platform" readonly>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">账号别名</label>
-                    <input type="text" class="form-control" id="edit-name">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">Cookie（留空不修改）</label>
-                    <textarea class="form-control" id="edit-cookie" rows="3" placeholder="留空表示不修改 Cookie"></textarea>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">月度总额度（0=不限制）</label>
-                    <input type="number" class="form-control" id="edit-quota" min="0">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button class="btn btn-primary" id="btn-edit-account">保存</button>
-            </div>
-        </div>
+    <!-- 扫码登录入口（随平台联动；酷狗 status=3 取消授权、QQ 以 identifier/login_type 轮询） -->
+    <div class="acct-qrbtns" x-show="addForm.platform === 'netease'">
+        {{ ui.btn('扫码登录（网易云APP扫码，自动填入 Cookie）', 'secondary', size='sm', icon='qr-code',
+                  attrs={':disabled': "qrCreating('netease')", ':class': "{ 'is-loading': qrCreating('netease') }",
+                         '@click': "startQrLogin('netease')"}) }}
     </div>
+    <div class="acct-qrbtns" x-show="addForm.platform === 'kugou'">
+        {{ ui.btn('扫码登录（酷狗APP扫码，自动填入 Cookie）', 'secondary', size='sm', icon='qr-code',
+                  attrs={':disabled': "qrCreating('kugou')", ':class': "{ 'is-loading': qrCreating('kugou') }",
+                         '@click': "startQrLogin('kugou')"}) }}
+    </div>
+    <div class="acct-qrbtns" x-show="addForm.platform === 'qq'">
+        {{ ui.btn('QQ扫码登录', 'secondary', size='sm', icon='qr-code',
+                  attrs={':disabled': "qrCreating('qq')", ':class': "{ 'is-loading': qrCreating('qq') }",
+                         '@click': "startQrLogin('qq', 'qq')"}) }}
+        {{ ui.btn('微信扫码登录', 'secondary', size='sm', icon='wechat',
+                  attrs={':disabled': "qrCreating('qq')", ':class': "{ 'is-loading': qrCreating('qq') }",
+                         '@click': "startQrLogin('qq', 'wx')"}) }}
+    </div>
+    <div class="acct-qrpanel" x-show="qr.platform !== '' && qr.status !== 'idle'">
+        <img x-show="qr.qrImg" :src="qr.qrImg" :alt="qr.platform && platName(qr.platform) + '登录二维码'">
+        <div class="acct-qrstatus"
+             :class="{ 'is-success': qr.status === 'success', 'is-error': qr.status === 'error' }"
+             x-text="qr.message"></div>
+    </div>
+
+    <label class="acct-label">月度总额度（0=不限制）
+        <input type="number" class="ui-input" x-model.number="addForm.quota_limit" min="0">
+    </label>
+    <div class="acct-formhint">设为 0 表示不限制；设置后达到额度会自动切换下一个账号</div>
+    {% endset %}
+    {% set add_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.addAcc = false'}) }}
+    {{ ui.btn('添加', 'primary', attrs={':disabled': 'addBusy', ':class': "{ 'is-loading': addBusy }", '@click': 'confirmAdd()'}) }}
+    {% endset %}
+    {{ ui.modal('addAcc', '添加账号', add_body, add_footer) }}
+
+    {# 编辑账号弹窗：平台只读；Cookie 留空不改；额度可编辑 #}
+    {% set edit_body %}
+    <label class="acct-label">平台
+        <input type="text" class="ui-input" :value="editForm.platformLabel" readonly disabled>
+    </label>
+    <label class="acct-label">账号别名
+        <input type="text" class="ui-input" x-model="editForm.name">
+    </label>
+    <label class="acct-label">Cookie（留空不修改）
+        <textarea class="ui-input" rows="3" x-model="editForm.cookie" placeholder="留空表示不修改 Cookie"></textarea>
+    </label>
+    <label class="acct-label">月度总额度（0=不限制）
+        <input type="number" class="ui-input" x-model.number="editForm.quota_limit" min="0">
+    </label>
+    {% endset %}
+    {% set edit_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.editAcc = false'}) }}
+    {{ ui.btn('保存', 'primary', attrs={':disabled': 'editBusy', ':class': "{ 'is-loading': editBusy }", '@click': 'confirmEdit()'}) }}
+    {% endset %}
+    {{ ui.modal('editAcc', '编辑账号', edit_body, edit_footer) }}
 </div>
 {% endblock %}
 
