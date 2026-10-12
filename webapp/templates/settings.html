@@ -4,26 +4,56 @@
 {% block title %}设置 - Deen音乐下载器{% endblock %}
 {% block content %}
 <style>
-    /* 设置页局部样式（set- 前缀，页面自治；ui- 组件层不改动） */
+    /* 设置页局部样式（set- 前缀，页面自治；ui- 组件层不改动）。
+       UI-05 布局重写：放弃 auto-fill 多列网格（高度差异大的表单卡片横向
+       铺排会产生大片留白），改为左侧分类导航 + 右侧单列表单面板 */
     .set-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
     .set-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
-    .set-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 14px; align-items: start; }
-    .set-span { grid-column: 1 / -1; }
+    .set-layout { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 18px; align-items: start; }
+
+    /* 左侧分类导航：宽屏 sticky 纵排；窄屏退化为顶部横向 chips */
+    .set-nav { position: sticky; top: calc(var(--topbar-h) + 16px); display: flex; flex-direction: column; gap: 2px; }
+    .set-navitem {
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px; border: 0; border-radius: var(--ui-r-s);
+        background: transparent; color: var(--ui-text-2);
+        font-size: 13px; font-weight: 500; text-align: left; cursor: pointer;
+        transition: background-color .12s, color .12s;
+    }
+    .set-navitem i { font-size: 15px; color: var(--ui-text-3); }
+    .set-navitem:hover { color: var(--ui-text); background: rgba(30, 36, 48, .05); }
+    .set-navitem.active { background: var(--ui-surface); color: var(--ui-primary); font-weight: 600; box-shadow: inset 2px 0 0 var(--ui-primary), var(--ui-shadow-1); }
+    .set-navitem.active i { color: var(--ui-primary); }
+
+    /* 右侧主区：单列卡片纵排，宽度上限约束表单行长 */
+    .set-main { display: flex; flex-direction: column; gap: 14px; max-width: 780px; min-width: 0; }
+    .set-panel { display: flex; flex-direction: column; gap: 14px; }
     .set-cardhead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
     .set-cardhead i { color: var(--ui-text-3); font-size: 16px; }
     .set-body { padding: 16px; }
-    .set-field { margin-bottom: 14px; }
+    .set-field { margin-bottom: 16px; }
     .set-field:last-child { margin-bottom: 0; }
     .set-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--ui-text); }
     .set-input { width: 100%; max-width: 420px; }
     .set-hint { margin-top: 4px; font-size: 12px; color: var(--ui-text-3); }
-    .set-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+
+    /* 局部多列：仅用于语义并列的短字段（音质三平台 / 成对数字输入） */
+    .set-cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .set-cols-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    @media (max-width: 787.98px) {
+        .set-cols-3 { grid-template-columns: 1fr; }
+        .set-cols-2 { grid-template-columns: 1fr; }
+    }
+
+    /* 开关组：纵排一行一项（含说明文字，横排挤压不可读） */
+    .set-checks { display: flex; flex-direction: column; gap: 10px; }
     .set-check { display: flex; align-items: flex-start; gap: 4px; font-size: 13px; color: var(--ui-text); cursor: pointer; }
     .set-check .ui-check { flex-shrink: 0; }
     .set-checktext { line-height: 28px; min-width: 0; }
     .set-checktext small { display: block; margin-top: 2px; font-size: 12px; line-height: 1.5; color: var(--ui-text-3); }
-    .set-switchrow { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 10px 16px; }
     .set-scope { display: inline-flex; gap: 16px; flex-wrap: wrap; }
+
+    /* API 服务子块 */
     .set-svc { padding: 14px 0; }
     .set-svc:first-of-type { padding-top: 2px; }
     .set-svc + .set-svc { border-top: 1px solid var(--ui-border); }
@@ -37,9 +67,23 @@
     .set-customrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
     .set-customrow .set-check { flex-shrink: 0; }
     .set-url { flex: 1 1 240px; max-width: 400px; }
+
+    /* 旧结构文件迁移提示条 */
     .set-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .08); border-radius: var(--ui-r-s); font-size: 12px; color: var(--ui-text); }
     .set-banner .ui-btn { margin-left: auto; }
+
+    /* 保存栏：sticky 常驻底部，跨分类可见 */
     .set-savebar { position: sticky; bottom: 10px; z-index: 800; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
+    .set-dirty { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: 12px; color: var(--ui-warning); }
+    .set-dirty i { font-size: 8px; }
+
+    /* 窄屏：分类导航变顶部横向滚动 chips，表单列退化为单列 */
+    @media (max-width: 991.98px) {
+        .set-layout { grid-template-columns: 1fr; gap: 10px; }
+        .set-nav { position: static; flex-direction: row; gap: 6px; overflow-x: auto; padding: 2px 2px 6px; -webkit-overflow-scrolling: touch; }
+        .set-navitem { flex-shrink: 0; white-space: nowrap; padding: 6px 12px; border: 1px solid var(--ui-border); border-radius: 999px; background: var(--ui-surface); }
+        .set-navitem.active { box-shadow: none; border-color: var(--ui-primary); }
+    }
 </style>
 
 <div x-data="settingsPage()" x-cloak>
@@ -50,276 +94,314 @@
     </div>
 
     <form @submit.prevent="save()">
-        <div class="set-grid">
+        <div class="set-layout">
 
-            <!-- Web 服务 -->
-            <div class="ui-card">
-                <div class="set-cardhead"><i class="bi bi-globe"></i> Web 服务</div>
-                <div class="set-body">
-                    <div class="set-field">
-                        <label class="set-label">Web 服务监听地址</label>
-                        <input type="text" class="ui-input set-input" x-model="form.web_port" placeholder="*:45600">
-                        <div class="set-hint">格式: host:port，如 *:45600 或 127.0.0.1:45600；* 表示监听所有网卡；修改后需重启服务生效</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 下载行为 -->
-            <div class="ui-card">
-                <div class="set-cardhead"><i class="bi bi-download"></i> 下载行为</div>
-                <div class="set-body">
-                    <div class="set-field">
-                        <label class="set-label">下载目录</label>
-                        <input type="text" class="ui-input set-input" x-model="form.output_dir" placeholder="downloads">
-                    </div>
-                    <div class="set-switchrow set-field">
-                        <label class="set-check">
-                            <span class="ui-check"><input type="checkbox" x-model="form.write_metadata"></span>
-                            <span class="set-checktext">写入元数据（标题/艺术家/专辑/封面）</span>
-                        </label>
-                        <label class="set-check">
-                            <span class="ui-check"><input type="checkbox" x-model="form.write_lyric"></span>
-                            <span class="set-checktext">嵌入歌词（LRC 带时间轴）</span>
-                        </label>
-                        {# 「文件名包含专辑」仅对旧版「歌手」结构有意义：结构切换随绑定显隐 #}
-                        <label class="set-check" x-show="form.dir_layout === 'artist'">
-                            <span class="ui-check"><input type="checkbox" x-model="form.filename_include_album"></span>
-                            <span class="set-checktext">文件名包含专辑（歌手 - 歌名 [专辑].ext）</span>
-                        </label>
-                        <label class="set-check">
-                            <span class="ui-check"><input type="checkbox" x-model="form.overwrite_existing"></span>
-                            <span class="set-checktext">同名文件已存在时覆盖重新下载（默认跳过）</span>
-                        </label>
-                    </div>
-                    <div class="set-row set-field">
-                        <div>
-                            <label class="set-label">单文件重试次数</label>
-                            <input type="number" class="ui-input set-input" x-model="form.max_retries" min="1" max="10">
-                        </div>
-                        <div>
-                            <label class="set-label">添加歌单默认下载数量</label>
-                            <input type="number" class="ui-input set-input" x-model="form.default_playlist_limit" min="1" max="9999">
-                            <div class="set-hint">添加新歌单时默认的下载前 N 首</div>
-                        </div>
-                    </div>
-                    <div class="set-field">
-                        <label class="set-label">排除歌曲关键字</label>
-                        <input type="text" class="ui-input set-input" x-model="form.exclude_keywords" placeholder="live,伴奏,remix">
-                        <div class="set-hint">包含这些词的歌曲不下载，多个关键字用英文逗号分隔（同时匹配歌名和歌手名）</div>
-                    </div>
-                    <div class="set-field">
-                        <label class="set-label">过滤应用范围</label>
-                        <div class="set-scope">
-                            <label class="set-check">
-                                <span class="ui-check"><input type="checkbox" x-model="form.scope_playlist"></span>
-                                <span class="set-checktext">歌单同步</span>
-                            </label>
-                            <label class="set-check">
-                                <span class="ui-check"><input type="checkbox" x-model="form.scope_search"></span>
-                                <span class="set-checktext">搜索下载</span>
-                            </label>
-                        </div>
-                        <div class="set-hint">单首下载不受此限制（尊重用户主动选择）</div>
-                    </div>
-                    {# v0.7.8.0 后端已默认 organize_direct_delete，此开关补齐设置页 UI #}
-                    <label class="set-check">
-                        <span class="ui-check"><input type="checkbox" x-model="form.organize_direct_delete"></span>
-                        <span class="set-checktext">音乐整理删除模式
-                            <small>音乐整理页清理重复文件时：开启=直接删除（不可恢复）；关闭=移入下载目录 .trash 回收站（可手动恢复，默认）</small>
-                        </span>
-                    </label>
-                </div>
-            </div>
-
-            <!-- 目录结构 -->
-            <div class="ui-card">
-                <div class="set-cardhead"><i class="bi bi-folder-symlink"></i> 目录结构</div>
-                <div class="set-body">
-                    <div class="set-field">
-                        <label class="set-label">下载目录结构</label>
-                        <select class="ui-select set-input" x-model="form.dir_layout">
-                            <option value="artist_album">歌手 / 专辑（年份）/ 歌曲名</option>
-                            <option value="artist">歌手 / 歌曲名（旧版结构）</option>
-                        </select>
-                        <div class="set-hint">新结构下文件名为「歌名-歌曲ID」；单曲无专辑名时用歌名当专辑目录；切换只影响新下载</div>
-                        {# 旧结构文件检测提示条：有存量才显示迁移入口（移动用户文件须 uiConfirm 显式确认） #}
-                        <div class="set-banner" x-show="migrate.needs !== null && migrate.needs > 0">
-                            <i class="bi bi-exclamation-triangle"></i>
-                            <span x-text="'检测到 ' + migrate.needs + ' 个旧结构文件未迁移'"></span>
-                            {{ ui.btn('迁移到「歌手 / 专辑」结构', 'primary', size='sm', icon='folder-symlink',
-                                      attrs={':disabled': 'migrate.busy',
-                                             ':class': "{ 'is-loading': migrate.busy }",
-                                             '@click': 'runMigrate()'}) }}
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 音质 -->
-            <div class="ui-card">
-                <div class="set-cardhead"><i class="bi bi-soundwave"></i> 音质</div>
-                <div class="set-body">
-                    <div class="set-row set-field">
-                        <div>
-                            <label class="set-label">网易云音质</label>
-                            {# 选项按音质从高到低排列（纯展示秩序，不参与降级逻辑） #}
-                            <select class="ui-select set-input" x-model="form.level_netease">
-                                <option value="sky">沉浸环绕声（需SVIP）</option>
-                                <option value="jymaster">超清母带（需SVIP）</option>
-                                <option value="vivid">臻音全景声（需SVIP）</option>
-                                <option value="dolby">杜比全景声（需SVIP）</option>
-                                <option value="jyeffect">高清臻音（需SVIP）</option>
-                                <option value="hires">Hi-Res（需豪华VIP）</option>
-                                <option value="lossless">无损 FLAC（需黑胶VIP）</option>
-                                <option value="exhigh">极高 320kbps（需会员）</option>
-                                <option value="standard">标准 128kbps MP3</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="set-label">QQ音乐音质</label>
-                            {# hires 与 lossless 同为 FLAC，保留 hires 项避免存量设置显示空白 #}
-                            <select class="ui-select set-input" x-model="form.level_qq">
-                                <option value="jymaster">臻品母带 FLAC 24bit/192kHz（需豪华绿钻）</option>
-                                <option value="hires">无损 FLAC（Hi-Res 档同无损）</option>
-                                <option value="lossless">无损 FLAC（需绿钻）</option>
-                                <option value="ogg640">OGG 640k SQ 无损（需VIP，备选）</option>
-                                <option value="exhigh">320kbps MP3（需登录）</option>
-                                <option value="standard">标准 128kbps MP3</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="set-label">酷狗音乐音质</label>
-                            <select class="ui-select set-input" x-model="form.level_kugou">
-                                <option value="hires">Hi-Res（需豪华VIP）</option>
-                                <option value="lossless">无损 FLAC（需VIP）</option>
-                                <option value="exhigh">320kbps MP3（需登录）</option>
-                                <option value="standard">标准 128kbps MP3</option>
-                            </select>
-                        </div>
-                    </div>
-                    <label class="set-check">
-                        <span class="ui-check"><input type="checkbox" x-model="form.enable_quality_fallback"></span>
-                        <span class="set-checktext">目标音质不可用时自动降档（回退到更低音质下载）</span>
-                    </label>
-                </div>
-            </div>
-
-            <!-- 多账号 -->
-            <div class="ui-card">
-                <div class="set-cardhead"><i class="bi bi-people"></i> 多账号下载模式</div>
-                <div class="set-body">
-                    <div class="set-field">
-                        <label class="set-label">下载模式</label>
-                        <select class="ui-select set-input" x-model="form.download_mode">
-                            <option value="fallback">接力模式（账号1达额度或失败后切换账号2）</option>
-                            <option value="round_robin">轮询模式（多账号循环下载）</option>
-                        </select>
-                        <div class="set-hint">
-                            <i class="bi bi-info-circle"></i>
-                            接力模式：优先用账号1，达额度或失败才切换；轮询模式：每个任务轮流分配账号。账号顺序在「账号管理」页调整。
-                        </div>
-                    </div>
-                    <div class="set-field">
-                        <label class="set-check">
-                            <span class="ui-check"><input type="checkbox" x-model="form.prefer_non_vip"></span>
-                            <span class="set-checktext">优先使用非VIP账号下载
-                                <small>开启后：非VIP歌曲优先用非VIP账号，仅 VIP 歌曲（fee=1）才用 VIP 账号；无可用账号时回退到全部账号</small>
-                            </span>
-                        </label>
-                    </div>
-                    <div class="set-field">
-                        <label class="set-label">单账号每小时下载上限</label>
-                        <input type="number" class="ui-input set-input" x-model="form.hourly_limit_per_account" min="0" max="10000">
-                        <div class="set-hint">0=不限制；自然小时内单账号成功达上限后切换账号，全部达上限则暂停 30 分钟</div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- 自动同步 -->
-            <div class="ui-card">
-                <div class="set-cardhead"><i class="bi bi-arrow-repeat"></i> 自动同步</div>
-                <div class="set-body">
-                    <label class="set-check set-field">
-                        <span class="ui-check"><input type="checkbox" x-model="form.auto_sync_enabled"></span>
-                        <span class="set-checktext">启用定时自动同步</span>
-                    </label>
-                    <div class="set-row set-field">
-                        <div>
-                            <label class="set-label">同步时间点</label>
-                            <input type="text" class="ui-input set-input" x-model="form.sync_times" placeholder="03:00,09:00,21:00">
-                            <div class="set-hint">多个时间用逗号分隔，格式 HH:MM，每天在这些时间点触发同步</div>
-                        </div>
-                        <div>
-                            <label class="set-label">抖动延迟（秒）</label>
-                            <input type="number" class="ui-input set-input" x-model="form.sync_jitter" min="0" max="3600">
-                            <div class="set-hint">触发后随机延迟 0~N 秒再执行，避免精准时刻请求</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- API 服务（三平台内置服务 + 可选自定义URL；宽屏占满一行） -->
-            <div class="ui-card set-span">
-                <div class="set-cardhead"><i class="bi bi-hdd-network"></i> API 服务</div>
-                <div class="set-body">
-                    <template x-for="svc in serviceList" :key="svc.key">
-                        <div class="set-svc">
-                            <div class="set-svchead" x-text="svc.name"></div>
-                            <!-- 状态徽章 + 详情（3s 轮询；自定义URL模式显示专属徽章） -->
-                            <div class="set-svcstatus">
-                                <span class="ui-badge" :class="svcBadge(svc.key).cls" x-text="svcBadge(svc.key).text"></span>
-                                <span class="set-svcdetail" x-text="svcBadge(svc.key).detail"></span>
-                            </div>
-                            <!-- 内置服务区块（勾选自定义URL后整体锁定禁操作） -->
-                            <div class="set-svcctl" :class="{ 'set-locked': isSvcCustom(svc.key) }">
-                                <label class="set-inlinelabel">端口
-                                    <input type="number" class="ui-input set-port" x-model="form[svc.portKey]"
-                                           min="1024" max="65535"
-                                           :disabled="svcPortLocked(svc.key)" :title="svcPortTitle(svc.key)">
-                                </label>
-                                <label class="set-check">
-                                    <span class="ui-check"><input type="checkbox" x-model="form[svc.autoKey]"></span>
-                                    <span class="set-checktext">随程序启动自动启动</span>
-                                </label>
-                                <span class="ui-row-actions">
-                                    {{ ui.btn('启动', 'primary', size='sm', icon='play',
-                                              attrs={':disabled': 'svcBusy(svc.key)',
-                                                     ':class': "{ 'is-loading': services[svc.key].starting }",
-                                                     '@click': 'startSvc(svc.key)'}) }}
-                                    {# 停止属危险操作：uiConfirm danger 二次确认（见 settings.js stopSvc） #}
-                                    {{ ui.btn('停止', 'danger', size='sm', icon='stop',
-                                              attrs={':disabled': 'svcBusy(svc.key)',
-                                                     ':class': "{ 'is-loading': services[svc.key].stopping }",
-                                                     '@click': 'stopSvc(svc.key)'}) }}
-                                </span>
-                            </div>
-                            <!-- 自定义URL：区块外，勾选后不受内置区块禁用影响 -->
-                            <div class="set-customrow">
-                                <label class="set-check">
-                                    <span class="ui-check"><input type="checkbox" x-model="form[svc.customKey]"></span>
-                                    <span class="set-checktext">使用自定义API服务URL</span>
-                                </label>
-                                <input type="text" class="ui-input set-url" x-model="form[svc.urlKey]"
-                                       :placeholder="svc.urlPlaceholder" :disabled="!form[svc.customKey]">
-                            </div>
-                        </div>
-                    </template>
-                </div>
-            </div>
-
-            <!-- 保存（非管理员禁用：window.IS_ADMIN 模板注入 + 后端二次校验） -->
-            <div class="set-savebar set-span">
-                <span class="ui-badge ui-badge-warning" x-show="!isAdmin">仅管理员可修改设置</span>
-                <button type="submit" class="ui-btn ui-btn-primary"
-                        :disabled="saving || loading || !isAdmin"
-                        :class="{ 'is-loading': saving }"
-                        :title="isAdmin ? '' : '仅管理员可修改设置'">
-                    <span class="ui-spinner" x-show="saving"></span>
-                    <i class="bi bi-save" x-show="!saving"></i>
-                    <span x-text="isAdmin ? '保存设置' : '保存设置（仅管理员）'"></span>
+            <!-- 左侧分类导航（当前分类随地址栏 hash 记忆，刷新不丢） -->
+            <nav class="set-nav" aria-label="配置分类">
+                <button type="button" class="set-navitem" :class="{ active: section === 'general' }" @click="goSection('general')">
+                    <i class="bi bi-sliders"></i><span>常规</span>
                 </button>
-            </div>
+                <button type="button" class="set-navitem" :class="{ active: section === 'download' }" @click="goSection('download')">
+                    <i class="bi bi-download"></i><span>下载行为</span>
+                </button>
+                <button type="button" class="set-navitem" :class="{ active: section === 'quality' }" @click="goSection('quality')">
+                    <i class="bi bi-soundwave"></i><span>音质</span>
+                </button>
+                <button type="button" class="set-navitem" :class="{ active: section === 'multiaccount' }" @click="goSection('multiaccount')">
+                    <i class="bi bi-people"></i><span>多账号</span>
+                </button>
+                <button type="button" class="set-navitem" :class="{ active: section === 'sync' }" @click="goSection('sync')">
+                    <i class="bi bi-arrow-repeat"></i><span>自动同步</span>
+                </button>
+                <button type="button" class="set-navitem" :class="{ active: section === 'api' }" @click="goSection('api')">
+                    <i class="bi bi-hdd-network"></i><span>API 服务</span>
+                </button>
+            </nav>
 
+            <!-- 右侧面板：一次只显示一个分类，表单以单列为主 -->
+            <div class="set-main">
+
+                <!-- 常规：Web 服务 + 目录结构 -->
+                <div class="set-panel" x-show="section === 'general'">
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-globe"></i> Web 服务</div>
+                        <div class="set-body">
+                            <div class="set-field">
+                                <label class="set-label">Web 服务监听地址</label>
+                                <input type="text" class="ui-input set-input" x-model="form.web_port" placeholder="*:45600">
+                                <div class="set-hint">格式: host:port，如 *:45600 或 127.0.0.1:45600；* 表示监听所有网卡；修改后需重启服务生效</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-folder-symlink"></i> 下载目录结构</div>
+                        <div class="set-body">
+                            <div class="set-field">
+                                <label class="set-label">下载目录结构</label>
+                                <select class="ui-select set-input" x-model="form.dir_layout">
+                                    <option value="artist_album">歌手 / 专辑（年份）/ 歌曲名</option>
+                                    <option value="artist">歌手 / 歌曲名（旧版结构）</option>
+                                </select>
+                                <div class="set-hint">新结构下文件名为「歌名-歌曲ID」；单曲无专辑名时用歌名当专辑目录；切换只影响新下载</div>
+                                {# 旧结构文件检测提示条：有存量才显示迁移入口（移动用户文件须 uiConfirm 显式确认） #}
+                                <div class="set-banner" x-show="migrate.needs !== null && migrate.needs > 0">
+                                    <i class="bi bi-exclamation-triangle"></i>
+                                    <span x-text="'检测到 ' + migrate.needs + ' 个旧结构文件未迁移'"></span>
+                                    {{ ui.btn('迁移到「歌手 / 专辑」结构', 'primary', size='sm', icon='folder-symlink',
+                                              attrs={':disabled': 'migrate.busy',
+                                                     ':class': "{ 'is-loading': migrate.busy }",
+                                                     '@click': 'runMigrate()'}) }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 下载行为 -->
+                <div class="set-panel" x-show="section === 'download'">
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-download"></i> 下载行为</div>
+                        <div class="set-body">
+                            <div class="set-field">
+                                <label class="set-label">下载目录</label>
+                                <input type="text" class="ui-input set-input" x-model="form.output_dir" placeholder="downloads">
+                            </div>
+                            <div class="set-checks set-field">
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form.write_metadata"></span>
+                                    <span class="set-checktext">写入元数据（标题/艺术家/专辑/封面）</span>
+                                </label>
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form.write_lyric"></span>
+                                    <span class="set-checktext">嵌入歌词（LRC 带时间轴）</span>
+                                </label>
+                                {# 「文件名包含专辑」仅对旧版「歌手」结构有意义：结构切换随绑定显隐 #}
+                                <label class="set-check" x-show="form.dir_layout === 'artist'">
+                                    <span class="ui-check"><input type="checkbox" x-model="form.filename_include_album"></span>
+                                    <span class="set-checktext">文件名包含专辑（歌手 - 歌名 [专辑].ext）</span>
+                                </label>
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form.overwrite_existing"></span>
+                                    <span class="set-checktext">同名文件已存在时覆盖重新下载（默认跳过）</span>
+                                </label>
+                            </div>
+                            <div class="set-cols-2 set-field">
+                                <div>
+                                    <label class="set-label">单文件重试次数</label>
+                                    <input type="number" class="ui-input set-input" x-model="form.max_retries" min="1" max="10">
+                                </div>
+                                <div>
+                                    <label class="set-label">添加歌单默认下载数量</label>
+                                    <input type="number" class="ui-input set-input" x-model="form.default_playlist_limit" min="1" max="9999">
+                                    <div class="set-hint">添加新歌单时默认的下载前 N 首</div>
+                                </div>
+                            </div>
+                            <div class="set-field">
+                                <label class="set-label">排除歌曲关键字</label>
+                                <input type="text" class="ui-input set-input" x-model="form.exclude_keywords" placeholder="live,伴奏,remix">
+                                <div class="set-hint">包含这些词的歌曲不下载，多个关键字用英文逗号分隔（同时匹配歌名和歌手名）</div>
+                            </div>
+                            <div class="set-field">
+                                <label class="set-label">过滤应用范围</label>
+                                <div class="set-scope">
+                                    <label class="set-check">
+                                        <span class="ui-check"><input type="checkbox" x-model="form.scope_playlist"></span>
+                                        <span class="set-checktext">歌单同步</span>
+                                    </label>
+                                    <label class="set-check">
+                                        <span class="ui-check"><input type="checkbox" x-model="form.scope_search"></span>
+                                        <span class="set-checktext">搜索下载</span>
+                                    </label>
+                                </div>
+                                <div class="set-hint">单首下载不受此限制（尊重用户主动选择）</div>
+                            </div>
+                            {# v0.7.8.0 后端已默认 organize_direct_delete，此开关补齐设置页 UI #}
+                            <label class="set-check">
+                                <span class="ui-check"><input type="checkbox" x-model="form.organize_direct_delete"></span>
+                                <span class="set-checktext">音乐整理删除模式
+                                    <small>音乐整理页清理重复文件时：开启=直接删除（不可恢复）；关闭=移入下载目录 .trash 回收站（可手动恢复，默认）</small>
+                                </span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 音质 -->
+                <div class="set-panel" x-show="section === 'quality'">
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-soundwave"></i> 音质</div>
+                        <div class="set-body">
+                            <div class="set-cols-3 set-field">
+                                <div>
+                                    <label class="set-label">网易云音质</label>
+                                    {# 选项按音质从高到低排列（纯展示秩序，不参与降级逻辑） #}
+                                    <select class="ui-select" style="width: 100%" x-model="form.level_netease">
+                                        <option value="sky">沉浸环绕声（需SVIP）</option>
+                                        <option value="jymaster">超清母带（需SVIP）</option>
+                                        <option value="vivid">臻音全景声（需SVIP）</option>
+                                        <option value="dolby">杜比全景声（需SVIP）</option>
+                                        <option value="jyeffect">高清臻音（需SVIP）</option>
+                                        <option value="hires">Hi-Res（需豪华VIP）</option>
+                                        <option value="lossless">无损 FLAC（需黑胶VIP）</option>
+                                        <option value="exhigh">极高 320kbps（需会员）</option>
+                                        <option value="standard">标准 128kbps MP3</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="set-label">QQ音乐音质</label>
+                                    {# hires 与 lossless 同为 FLAC，保留 hires 项避免存量设置显示空白 #}
+                                    <select class="ui-select" style="width: 100%" x-model="form.level_qq">
+                                        <option value="jymaster">臻品母带 FLAC 24bit/192kHz（需豪华绿钻）</option>
+                                        <option value="hires">无损 FLAC（Hi-Res 档同无损）</option>
+                                        <option value="lossless">无损 FLAC（需绿钻）</option>
+                                        <option value="ogg640">OGG 640k SQ 无损（需VIP，备选）</option>
+                                        <option value="exhigh">320kbps MP3（需登录）</option>
+                                        <option value="standard">标准 128kbps MP3</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="set-label">酷狗音乐音质</label>
+                                    <select class="ui-select" style="width: 100%" x-model="form.level_kugou">
+                                        <option value="hires">Hi-Res（需豪华VIP）</option>
+                                        <option value="lossless">无损 FLAC（需VIP）</option>
+                                        <option value="exhigh">极高 320kbps（需登录）</option>
+                                        <option value="standard">标准 128kbps MP3</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <label class="set-check">
+                                <span class="ui-check"><input type="checkbox" x-model="form.enable_quality_fallback"></span>
+                                <span class="set-checktext">目标音质不可用时自动降档（回退到更低音质下载）</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 多账号 -->
+                <div class="set-panel" x-show="section === 'multiaccount'">
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-people"></i> 多账号下载模式</div>
+                        <div class="set-body">
+                            <div class="set-field">
+                                <label class="set-label">下载模式</label>
+                                <select class="ui-select set-input" x-model="form.download_mode">
+                                    <option value="fallback">接力模式（账号1达额度或失败后切换账号2）</option>
+                                    <option value="round_robin">轮询模式（多账号循环下载）</option>
+                                </select>
+                                <div class="set-hint">
+                                    <i class="bi bi-info-circle"></i>
+                                    接力模式：优先用账号1，达额度或失败才切换；轮询模式：每个任务轮流分配账号。账号顺序在「账号管理」页调整。
+                                </div>
+                            </div>
+                            <div class="set-field">
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form.prefer_non_vip"></span>
+                                    <span class="set-checktext">优先使用非VIP账号下载
+                                        <small>开启后：非VIP歌曲优先用非VIP账号，仅 VIP 歌曲（fee=1）才用 VIP 账号；无可用账号时回退到全部账号</small>
+                                    </span>
+                                </label>
+                            </div>
+                            <div class="set-field">
+                                <label class="set-label">单账号每小时下载上限</label>
+                                <input type="number" class="ui-input set-input" x-model="form.hourly_limit_per_account" min="0" max="10000">
+                                <div class="set-hint">0=不限制；自然小时内单账号成功达上限后切换账号，全部达上限则暂停 30 分钟</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 自动同步 -->
+                <div class="set-panel" x-show="section === 'sync'">
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-arrow-repeat"></i> 自动同步</div>
+                        <div class="set-body">
+                            <label class="set-check set-field">
+                                <span class="ui-check"><input type="checkbox" x-model="form.auto_sync_enabled"></span>
+                                <span class="set-checktext">启用定时自动同步</span>
+                            </label>
+                            <div class="set-cols-2 set-field">
+                                <div>
+                                    <label class="set-label">同步时间点</label>
+                                    <input type="text" class="ui-input set-input" x-model="form.sync_times" placeholder="03:00,09:00,21:00">
+                                    <div class="set-hint">多个时间用逗号分隔，格式 HH:MM，每天在这些时间点触发同步</div>
+                                </div>
+                                <div>
+                                    <label class="set-label">抖动延迟（秒）</label>
+                                    <input type="number" class="ui-input set-input" x-model="form.sync_jitter" min="0" max="3600">
+                                    <div class="set-hint">触发后随机延迟 0~N 秒再执行，避免精准时刻请求</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- API 服务（三平台内置服务 + 可选自定义URL） -->
+                <div class="set-panel" x-show="section === 'api'">
+                    <div class="ui-card">
+                        <div class="set-cardhead"><i class="bi bi-hdd-network"></i> API 服务</div>
+                        <div class="set-body">
+                            <template x-for="svc in serviceList" :key="svc.key">
+                                <div class="set-svc">
+                                    <div class="set-svchead" x-text="svc.name"></div>
+                                    <!-- 状态徽章 + 详情（3s 轮询；自定义URL模式显示专属徽章） -->
+                                    <div class="set-svcstatus">
+                                        <span class="ui-badge" :class="svcBadge(svc.key).cls" x-text="svcBadge(svc.key).text"></span>
+                                        <span class="set-svcdetail" x-text="svcBadge(svc.key).detail"></span>
+                                    </div>
+                                    <!-- 内置服务区块（勾选自定义URL后整体锁定禁操作） -->
+                                    <div class="set-svcctl" :class="{ 'set-locked': isSvcCustom(svc.key) }">
+                                        <label class="set-inlinelabel">端口
+                                            <input type="number" class="ui-input set-port" x-model="form[svc.portKey]"
+                                                   min="1024" max="65535"
+                                                   :disabled="svcPortLocked(svc.key)" :title="svcPortTitle(svc.key)">
+                                        </label>
+                                        <label class="set-check">
+                                            <span class="ui-check"><input type="checkbox" x-model="form[svc.autoKey]"></span>
+                                            <span class="set-checktext">随程序启动自动启动</span>
+                                        </label>
+                                        <span class="ui-row-actions">
+                                            {{ ui.btn('启动', 'primary', size='sm', icon='play',
+                                                      attrs={':disabled': 'svcBusy(svc.key)',
+                                                             ':class': "{ 'is-loading': services[svc.key].starting }",
+                                                             '@click': 'startSvc(svc.key)'}) }}
+                                            {# 停止属危险操作：uiConfirm danger 二次确认（见 settings.js stopSvc） #}
+                                            {{ ui.btn('停止', 'danger', size='sm', icon='stop',
+                                                      attrs={':disabled': 'svcBusy(svc.key)',
+                                                             ':class': "{ 'is-loading': services[svc.key].stopping }",
+                                                             '@click': 'stopSvc(svc.key)'}) }}
+                                        </span>
+                                    </div>
+                                    <!-- 自定义URL：区块外，勾选后不受内置区块禁用影响 -->
+                                    <div class="set-customrow">
+                                        <label class="set-check">
+                                            <span class="ui-check"><input type="checkbox" x-model="form[svc.customKey]"></span>
+                                            <span class="set-checktext">使用自定义API服务URL</span>
+                                        </label>
+                                        <input type="text" class="ui-input set-url" x-model="form[svc.urlKey]"
+                                               :placeholder="svc.urlPlaceholder" :disabled="!form[svc.customKey]">
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 保存（非管理员禁用：window.IS_ADMIN 模板注入 + 后端二次校验） -->
+                <div class="set-savebar">
+                    <span class="set-dirty" x-show="isDirty" x-cloak><i class="bi bi-circle-fill"></i> 有未保存的更改</span>
+                    <span class="ui-badge ui-badge-warning" x-show="!isAdmin">仅管理员可修改设置</span>
+                    <button type="submit" class="ui-btn ui-btn-primary"
+                            :disabled="saving || loading || !isAdmin"
+                            :class="{ 'is-loading': saving }"
+                            :title="isAdmin ? '' : '仅管理员可修改设置'">
+                        <span class="ui-spinner" x-show="saving"></span>
+                        <i class="bi bi-save" x-show="!saving"></i>
+                        <span x-text="isAdmin ? '保存设置' : '保存设置（仅管理员）'"></span>
+                    </button>
+                </div>
+
+            </div>
         </div>
     </form>
 </div>

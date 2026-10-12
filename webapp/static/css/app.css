@@ -4,6 +4,25 @@
    ============================================================ */
 *, *::before, *::after { box-sizing: border-box; }
 
+/* 同源整页导航交叉淡化（Chromium 126+ 渐进增强）：侧边栏切换页面时
+   旧页截图保持到新页首帧再过渡，消除"清屏→白屏→内容"的闪烁窗口；
+   不支持的 WebView 自动忽略本规则，行为不变 */
+@view-transition {
+    navigation: auto;
+}
+
+/* 减少动态效果偏好：关闭导航过渡动画（切换仍为瞬时整页导航） */
+@media (prefers-reduced-motion: reduce) {
+    @view-transition {
+        navigation: none;
+    }
+    ::view-transition-group(*),
+    ::view-transition-old(*),
+    ::view-transition-new(*) {
+        animation: none;
+    }
+}
+
 body {
     margin: 0;
     font-family: "Microsoft YaHei", "微软雅黑", sans-serif;

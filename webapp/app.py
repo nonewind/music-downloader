@@ -57,7 +57,7 @@ def _parse_data_dir_arg(argv=None):
     return args
 
 
-from flask import Flask
+from flask import Flask, request
 
 from models import init_db, Setting
 from task_manager import TaskManager
@@ -210,11 +210,24 @@ app.config["TASK_MANAGER"] = task_manager
 
 
 @app.after_request
-def _no_cache_html(resp):
-    """HTML 页面禁止浏览器缓存：页面永远取最新（JS/CSS 由 static_v
-    的 mtime 缓存戳控制失效），避免改代码后浏览器仍用旧页面/旧脚本"""
+def _cache_policy(resp):
+    """缓存策略（UI-05 导航黑屏修复的一部分）
+
+    - HTML 页面 no-cache：页面永远取最新（JS/CSS 由 static_v 的 mtime
+      缓存戳控制失效），避免改代码后浏览器仍用旧页面/旧脚本
+    - 静态资源强缓存：带 ?v= 戳的 URL 与 /static/vendor/（路径含版本号）
+      内容不可变，直接命中本地缓存。此前 Werkzeug 3.1 默认给静态文件发
+      no-cache，每次整页导航 WebView 都要对 CSS/JS/图标字体逐个 304
+      协商往返，头部 CSS 阻塞首帧，叠加 WebView 导航清屏即"黑屏后
+      重新加载"；强缓存后往返归零，首帧显著提前
+    """
     if resp.mimetype == "text/html":
         resp.headers["Cache-Control"] = "no-cache"
+    elif request.path.startswith("/static/") and (
+        request.path.startswith("/static/vendor/")
+        or request.args.get("v", "").isdigit()
+    ):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return resp
 
 

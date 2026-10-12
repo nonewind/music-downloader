@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Deen音乐下载器{% endblock %}</title>
+    {# 关键 CSS 内联（先于外部样式表）：整页导航时 WebView 清屏后立即
+       绘制应用底色而非 WebView 默认黑底（色值与 app.css --ui-bg 同步
+       维护）；x-cloak 规则内联避免外部 CSS 未到达时受控元素闪现 #}
+    <style>
+        html { background: #f6f7f9; color-scheme: light; }
+        [x-cloak] { display: none !important; }
+    </style>
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css') }}" rel="stylesheet">
     {# Frontend 2.0：CSS 也走 static_v 缓存戳（与 JS 一致，改样式即失效缓存） #}
     <link href="{{ static_v('css/app.css') }}" rel="stylesheet">

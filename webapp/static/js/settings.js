@@ -51,6 +51,10 @@ function svcDef(key) {
 // 单个服务的运行时状态（每次调用 settingsPage() 随实例新建，无跨页共享）
 const blankSvcState = () => ({ data: null, starting: false, stopping: false });
 
+// 设置页分类（UI-05 布局重写）：左侧导航的 section key 集合，
+// 同时用于校验地址栏 hash 与 goSection 入参
+const SETTING_SECTIONS = ["general", "download", "quality", "multiaccount", "sync", "api"];
+
 function settingsPage() {
     return {
         // ---- 唯一状态入口 ----
@@ -58,6 +62,8 @@ function settingsPage() {
         form: {},                 // loadSettings() 全量回填（含 organize_direct_delete）
         loading: true,
         saving: false,
+        section: "general",       // 当前分类（hash 记忆，刷新/直达不丢）
+        _savedSnapshot: "",       // 回填后的 payload 快照（isDirty 比较）
         // 目录结构迁移：needs=null 检测中/隐藏提示条；>0 显示提示条
         migrate: { needs: null, busy: false },
         services: { ncm: blankSvcState(), qq: blankSvcState(), kugou: blankSvcState() },
@@ -66,10 +72,22 @@ function settingsPage() {
         // 保存按钮可用性：window.IS_ADMIN 由模板注入（后端 PUT 另有二次校验）
         get isAdmin() { return window.IS_ADMIN === true; },
 
+        // 有未保存更改（回填未完成时不提示；保存成功后随快照更新自动消失）
+        get isDirty() {
+            if (this.loading || !this._savedSnapshot || !this.form) return false;
+            try {
+                return JSON.stringify(this.buildPayload()) !== this._savedSnapshot;
+            } catch (_) {
+                return false;
+            }
+        },
+
         // ============================================================
         // 生命周期
         // ============================================================
         async init() {
+            this._restoreSectionFromHash();
+            window.addEventListener("hashchange", () => this._restoreSectionFromHash());
             this.refreshAllSvc();
             // 3s 轮询三服务状态（页面在后台时不发无谓请求，切回前台下一轮恢复）
             this._pollTimer = setInterval(() => this.pollSvcStatuses(), 3000);
@@ -85,6 +103,20 @@ function settingsPage() {
         },
 
         // ============================================================
+        // 分类导航：hash 记忆（replaceState 不产生历史条目，后退应离开
+        // 设置页而不是在分类间打转）
+        // ============================================================
+        goSection(key) {
+            if (!SETTING_SECTIONS.includes(key) || key === this.section) return;
+            this.section = key;
+            history.replaceState(null, "", "#" + key);
+        },
+        _restoreSectionFromHash() {
+            const h = window.location.hash.replace(/^#/, "");
+            if (SETTING_SECTIONS.includes(h)) this.section = h;
+        },
+
+        // ============================================================
         // 配置回填与保存
         // ============================================================
         async loadSettings() {
@@ -95,6 +127,12 @@ function settingsPage() {
                 showToast(e.message, "错误", "error");
             } finally {
                 this.loading = false;
+            }
+            // 回填完成才建立 dirty 比较基线（applySettings 后 form 已完整）
+            try {
+                this._savedSnapshot = JSON.stringify(this.buildPayload());
+            } catch (_) {
+                this._savedSnapshot = "";
             }
         },
 
