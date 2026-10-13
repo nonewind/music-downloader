@@ -33,6 +33,16 @@
     .hist-failbtn { font: inherit; border: 0; padding: 2px 10px; cursor: pointer; }
     .hist-meta { margin: 0 0 8px; font-size: 13px; }
     .hist-delwarn { margin: 0; padding: 10px 12px; font-size: 13px; color: #b45309; background: rgba(245, 158, 11, .12); border-radius: var(--ui-r-s); }
+    .hist-kind { margin-left: 6px; font-size: 11px; vertical-align: 1px; }
+    .hist-upmodal { width: 860px; }
+    .hist-upbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+    .hist-upbar label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-2); }
+    .hist-uprecent { margin-left: auto; font-size: 12px; color: var(--ui-text-3); }
+    .hist-uplist { max-height: 46vh; overflow-y: auto; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
+    .hist-uplist .ui-table th { position: sticky; top: 0; background: var(--ui-surface); z-index: 1; }
+    .hist-uphint { margin: 10px 0 0; font-size: 12px; color: var(--ui-text-3); }
+    .hist-upfoot { flex: 1; align-self: center; font-size: 12px; color: var(--ui-text-2); }
+    .hist-upfoot.is-over { color: var(--ui-danger); }
     .hist-failreason { margin: 0; padding: 10px 12px; color: var(--ui-text); background: rgba(239, 68, 68, .08); border: 1px solid rgba(239, 68, 68, .25); border-radius: var(--ui-r-s); white-space: pre-wrap; word-break: break-all; }
     @media (max-width: 767.98px) {
         .hist-task-line { grid-template-columns: minmax(0, 1fr) auto auto; }
@@ -44,11 +54,12 @@
     <!-- 1. 页头：标题 + 全局操作（有任何任务时显示） -->
     <div class="hist-pagehead">
         <h4><i class="bi bi-download"></i> 下载</h4>
-        <div class="hist-globalops" x-show="tasks.length">
+        <div class="hist-globalops">
+            {{ ui.btn('音质升级', 'secondary', icon='graph-up-arrow', attrs={'@click': 'openUpgrade()'}) }}
             {{ ui.btn('暂停全部', 'secondary', icon='pause-fill',
-                      attrs={':disabled': '!canPauseAll || allOpsBusy', '@click': 'pauseAll()'}) }}
+                      attrs={'x-show': 'tasks.length', ':disabled': '!canPauseAll || allOpsBusy', '@click': 'pauseAll()'}) }}
             {{ ui.btn('继续全部', 'secondary', icon='play-fill',
-                      attrs={':disabled': '!canResumeAll || allOpsBusy', '@click': 'resumeAll()'}) }}
+                      attrs={'x-show': 'tasks.length', ':disabled': '!canResumeAll || allOpsBusy', '@click': 'resumeAll()'}) }}
         </div>
     </div>
 
@@ -64,7 +75,10 @@
                     <span class="hist-task-name ui-truncate"
                           x-text="(t.artists ? t.artists + ' - ' : '') + t.song_name"
                           :title="(t.artists ? t.artists + ' - ' : '') + t.song_name"></span>
-                    <span class="ui-badge" :class="statusMeta(t.status).cls" x-text="statusMeta(t.status).text"></span>
+                    <span class="ui-row-actions">
+                        <span class="ui-badge ui-badge-info" x-show="t.kind === 'upgrade'">升级</span>
+                        <span class="ui-badge" :class="statusMeta(t.status).cls" x-text="statusMeta(t.status).text"></span>
+                    </span>
                     <span class="hist-prog">
                         <span class="hist-prog-bar" :style="'width:' + Math.min(100, Math.max(0, t.progress || 0)) + '%'"></span>
                     </span>
@@ -182,6 +196,7 @@
                                 <td>
                                     <span class="hist-songname ui-truncate" x-text="s.name"
                                           :title="s.file_path || s.name"></span>
+                                    <span class="ui-badge ui-badge-info hist-kind" x-show="s.kind === 'upgrade'">升级</span>
                                     <span class="hist-album" x-show="s.album" x-text="s.album" :title="s.album"></span>
                                     {# 文件状态徽章（ORG-04）：索引派生的磁盘状态摘要，
                                        file_state 为 null/未知值时不渲染（低视觉噪音） #}
@@ -200,12 +215,13 @@
                                             x-show="s.status === 'failed'" @click="showFail(s)"
                                             title="点击查看失败原因">失败</button>
                                     <span class="ui-badge" x-show="s.status !== 'failed'"
-                                          :class="statusMeta(s.status).cls" x-text="statusMeta(s.status).text"></span>
+                                          :class="statusMeta(s.status, s.kind).cls" x-text="statusMeta(s.status, s.kind).text"
+                                          :title="s.status === 'skipped' ? (s.error_msg || '') : ''"></span>
                                 </td>
                                 <td>
                                     <span class="ui-row-actions">
                                         <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
-                                                x-show="s.status === 'failed'" @click="retrySong(s)" title="重试">
+                                                x-show="s.status === 'failed' && s.kind !== 'upgrade'" @click="retrySong(s)" title="重试">
                                             <i class="bi bi-arrow-clockwise"></i> 重试
                                         </button>
                                         <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
@@ -273,6 +289,108 @@
                 {{ ui.btn('仅删记录', 'secondary', attrs={'@click': 'delSongRecordOnly()'}) }}
                 {{ ui.btn('删除记录和文件', 'danger', attrs={'@click': 'delSongWithFile()'}) }}
                 {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.delSong = false'}) }}
+            </div>
+        </div>
+    </div>
+
+    {# 5. 音质升级弹窗（UPG-04）：宽版，按 delSong 同款结构手写（宏宽度固定 480px） #}
+    <div class="ui-modal-mask" id="upgrade-mask" x-cloak x-show="$store.modals.upgrade"
+         @keydown.escape.window="$store.modals.upgrade = false"
+         @click.self="$store.modals.upgrade = false" style="display: none">
+        <div class="ui-modal hist-upmodal" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">
+            <div class="ui-modal-header">
+                <h3 id="upgrade-title">音质升级</h3>
+                <button type="button" class="ui-modal-close" aria-label="关闭"
+                        @click="$store.modals.upgrade = false">&times;</button>
+            </div>
+            <div class="ui-modal-body">
+                <div class="hist-upbar">
+                    <label>平台
+                        <select class="ui-select" x-model="upPlatform" @change="loadUpgrade()">
+                            <option value="netease">网易云</option>
+                            <option value="qq">QQ音乐</option>
+                            <option value="kugou">酷狗音乐</option>
+                        </select>
+                    </label>
+                    <span>当前音质设置：<b x-text="get_quality_name(upTarget) || '--'"></b></span>
+                    <span class="hist-uprecent" x-show="upRecent">
+                        近 <span x-text="upCooldown"></span> 天：已升级 <b class="ui-mono" x-text="upRecent ? upRecent.done : 0"></b>
+                        · 无更高音源 <b class="ui-mono" x-text="upRecent ? upRecent.skipped : 0"></b>
+                        · 失败 <b class="ui-mono" x-text="upRecent ? upRecent.failed : 0"></b>
+                        · 进行中 <b class="ui-mono" x-text="upRecent ? upRecent.active : 0"></b>
+                    </span>
+                </div>
+
+                <div x-show="upLoading && !upItems.length" class="ui-text-3">加载中…</div>
+                <div x-show="!upLoading && !upItems.length">
+                    <p class="ui-text-3" x-show="upTargetComparable">没有可升级的歌曲：已下载歌曲的音质均不低于当前设置。</p>
+                    <p class="ui-text-3" x-show="!upTargetComparable">当前音质设置为特殊档位，无法与已下载音质比较；请在设置中选择常规档位后再试。</p>
+                </div>
+
+                <div x-show="upItems.length">
+                    <div class="hist-batchbar">
+                        <span>共 <b class="ui-mono" x-text="upTotal"></b> 首可升级，已选 <b class="ui-mono" x-text="upCheckedCount"></b> 首</span>
+                        {{ ui.btn('选前 100 首', 'secondary', size='sm', attrs={'@click': 'upSelectFirst()'}) }}
+                    </div>
+                    <div class="hist-uplist">
+                        <table class="ui-table">
+                            <thead>
+                                <tr>
+                                    <th style="width:40px">
+                                        <span class="ui-check">
+                                            <input type="checkbox" aria-label="全选已加载"
+                                                   :checked="upAllChecked" @change="upToggleAll($event.target.checked)"
+                                                   x-effect="$el.indeterminate = upCheckedCount > 0 && !upAllChecked">
+                                        </span>
+                                    </th>
+                                    <th>歌曲</th>
+                                    <th>歌手</th>
+                                    <th style="width:110px">当前音质</th>
+                                    <th style="width:130px">实际规格</th>
+                                    <th style="width:150px">下载时间</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="it in upItems" :key="it.song_id">
+                                    <tr>
+                                        <td>
+                                            <span class="ui-check">
+                                                <input type="checkbox" :checked="upChecked.has(it.song_id)"
+                                                       @change="upToggle(it, $event.target.checked)"
+                                                       :aria-label="'选择：' + it.name">
+                                            </span>
+                                        </td>
+                                        <td><span class="hist-songname ui-truncate" x-text="it.name" :title="it.file_path"></span></td>
+                                        <td x-text="it.artists"></td>
+                                        <td x-text="get_quality_name(it.quality)"></td>
+                                        <td class="ui-mono" style="font-size:12px" x-text="fmtSpec(it.spec)"></td>
+                                        <td><span class="ui-text-3" style="font-size:12px" x-text="fmtSongTime(it.downloaded_at)"></span></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div style="margin-top:8px; text-align:center" x-show="upItems.length < upTotal">
+                        {{ ui.btn('加载更多', 'secondary', size='sm',
+                                  attrs={':disabled': 'upLoading', '@click': 'loadUpgrade(true)'}) }}
+                    </div>
+                    <p class="hist-uphint">
+                        按下载记录的音质判断是否可升级，「实际规格」来自音乐整理的扫描结果，仅供参考。
+                        取不到更高音质时自动跳过、不覆盖原文件；升级为不同格式（如 MP3 → FLAC）后，旧文件会保留，可在「音乐整理」中清理。
+                    </p>
+                </div>
+            </div>
+            <div class="ui-modal-footer">
+                <span class="hist-upfoot" :class="{ 'is-over': upCheckedCount > upLimit }"
+                      x-text="upCheckedCount > upLimit
+                              ? '单次最多升级 ' + upLimit + ' 首，请减少勾选'
+                              : (upCheckedCount ? '最多消耗 ' + upCheckedCount + ' 次下载额度' : '')"></span>
+                {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.upgrade = false'}) }}
+                <button type="button" class="ui-btn ui-btn-primary"
+                        :disabled="!upCheckedCount || upCheckedCount > upLimit || upBusy"
+                        :class="{ 'is-loading': upBusy }" @click="submitUpgrade()">
+                    <i class="bi bi-graph-up-arrow"></i> <span x-text="'升级选中（' + upCheckedCount + '）'"></span>
+                </button>
             </div>
         </div>
     </div>

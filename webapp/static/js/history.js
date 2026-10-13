@@ -61,6 +61,18 @@ function historyPage() {
         retryAllBusy: false,
         clearFailedBusy: false,
 
+        // ---- 音质升级弹窗（UPG-04）----
+        upPlatform: "netease",
+        upLoading: false,
+        upItems: [],             // 已加载的候选（分页追加）
+        upTotal: 0,
+        upTarget: "",            // 当前平台音质设置（候选判定基准）
+        upRecent: null,          // 近 N 天升级结果计数 {done, skipped, failed, active}
+        upCooldown: 7,
+        upLimit: 100,            // 单次批量上限（服务端下发）
+        upChecked: new Set(),    // 勾选的 song_id
+        upBusy: false,
+
         // 防重入：上一轮请求未返回时跳过本轮（0.5s 轮询下必须）
         _loadingTasks: false,
 
@@ -77,7 +89,11 @@ function historyPage() {
         // ============================================================
         // 活跃任务区
         // ============================================================
-        statusMeta(status) {
+        // kind=upgrade 的 skipped 是「没取到更高音质」而非「已下载」，单独文案
+        statusMeta(status, kind) {
+            if (kind === "upgrade" && status === "skipped") {
+                return { text: "未升级", cls: "ui-badge-muted" };
+            }
             return STATUS_META[status] || { text: status, cls: "ui-badge-muted" };
         },
 
@@ -475,6 +491,93 @@ function historyPage() {
                 showToast(e.message, "错误");
             } finally {
                 this.clearFailedBusy = false;
+            }
+        },
+
+        // ============================================================
+        // 音质升级（UPG-04）：候选清单 → 勾选 → 批量入队。判定口径为
+        // 下载记录的交付档位；「实际规格」来自音乐整理的文件索引，仅作参考
+        // ============================================================
+        openUpgrade() {
+            this.$store.modals.upgrade = true;
+            this.loadUpgrade();
+        },
+        async loadUpgrade(append) {
+            if (this.upLoading) return;
+            this.upLoading = true;
+            const offset = append ? this.upItems.length : 0;
+            try {
+                const qs = "platform=" + encodeURIComponent(this.upPlatform) + "&offset=" + offset + "&limit=200";
+                const d = (await api("/api/upgrade/candidates?" + qs)).data;
+                this.upItems = append ? this.upItems.concat(d.items) : d.items;
+                if (!append) this.upChecked = new Set();
+                this.upTotal = d.total;
+                this.upTarget = d.target_level;
+                this.upRecent = d.recent;
+                this.upCooldown = d.cooldown_days;
+                this.upLimit = d.batch_limit;
+            } catch (e) {
+                showToast(e.message, "错误");
+            } finally {
+                this.upLoading = false;
+            }
+        },
+        // 目标档位在比较序外（杜比等）时后端返回空候选，前端给出原因
+        get upTargetComparable() {
+            return !["jyeffect", "dolby", "vivid", "sky", "ogg640"].includes(this.upTarget);
+        },
+        get upCheckedCount() {
+            return this.upChecked.size;
+        },
+        get upAllChecked() {
+            return this.upItems.length > 0 && this.upItems.every(it => this.upChecked.has(it.song_id));
+        },
+        upToggleAll(on) {
+            this.upChecked = on ? new Set(this.upItems.map(it => it.song_id)) : new Set();
+        },
+        upToggle(it, on) {
+            if (on) this.upChecked.add(it.song_id);
+            else this.upChecked.delete(it.song_id);
+        },
+        // 一键选前 N 首（N=单次上限），大库下免得逐个勾
+        upSelectFirst() {
+            this.upChecked = new Set(this.upItems.slice(0, this.upLimit).map(it => it.song_id));
+        },
+        fmtSpec(sp) {
+            if (!sp) return "未扫描";
+            const ext = (sp.ext || "").toUpperCase();
+            if (sp.lossless) {
+                const parts = [];
+                if (sp.bits_per_sample) parts.push(sp.bits_per_sample + "bit");
+                if (sp.sample_rate) parts.push((sp.sample_rate / 1000).toFixed(1).replace(/\.0$/, "") + "kHz");
+                return (ext + " " + parts.join("/")).trim();
+            }
+            return (ext + " " + (sp.bitrate_kbps ? sp.bitrate_kbps + "kbps" : "")).trim();
+        },
+        async submitUpgrade() {
+            const n = this.upCheckedCount;
+            if (!n || n > this.upLimit || this.upBusy) return;
+            const ok = await uiConfirm({
+                title: "音质升级",
+                message: `将按当前设置（${get_quality_name(this.upTarget)}）重新下载选中的 ${n} 首歌曲，最多消耗 ${n} 次下载额度。\n` +
+                         `取不到更高音质的歌曲会自动跳过、不覆盖原文件，${this.upCooldown} 天内不再列入候选。`,
+                confirmText: "开始升级",
+            });
+            if (!ok) return;
+            this.upBusy = true;
+            try {
+                const data = await api("/api/upgrade/enqueue", {
+                    method: "POST",
+                    body: JSON.stringify({ platform: this.upPlatform, song_ids: Array.from(this.upChecked) }),
+                });
+                showToast(data.msg, "音质升级");
+                this.$store.modals.upgrade = false;
+                await this.loadTasks();     // 升级产生新任务：刷新任务区并唤醒轮询
+                this.loadSongs(this.page);
+            } catch (e) {
+                showToast(e.message, "错误");
+            } finally {
+                this.upBusy = false;
             }
         },
     };
