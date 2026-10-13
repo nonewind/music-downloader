@@ -225,9 +225,11 @@ function historyPage() {
                 // 勾选随刷新重置（与旧版每次加载后全不勾一致）
                 this.checked = new Set();
                 // 失败重试栏：只要库内存在失败记录就显示（不依赖当前筛选），
-                // 让用户在任何视图下都能看到并处理失败记录
+                // 让用户在任何视图下都能看到并处理失败记录。只计 kind=normal：
+                // 升级失败不改动原成功记录，「全部重试」处理不了，计入会与
+                // 实际重试数不符（升级失败的歌会重新出现在音质升级候选中）
                 try {
-                    const failedData = await api("/api/songs?status=failed&per_page=1");
+                    const failedData = await api("/api/songs?status=failed&kind=normal&per_page=1");
                     this.failedCount = failedData.total || 0;
                 } catch (_) {
                     this.failedCount = 0;   // 查询失败不影响主列表，默认隐藏

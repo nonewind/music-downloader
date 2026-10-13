@@ -247,3 +247,14 @@ def test_api_songs_and_tasks_expose_kind(client, tmp_path):
     assert {r["kind"] for r in rows} == {"upgrade"}
     tasks = client.get("/api/tasks").get_json()["data"]
     assert tasks[0]["kind"] == "upgrade"
+
+
+def test_api_songs_kind_filter_for_retry_bar(client):
+    """失败重试栏只统计可重试的失败（kind=normal）：升级失败不改动原成功
+    记录，「全部重试」不会处理它们，计入会导致数字与实际重试数不符"""
+    _task("1", "failed", kind="normal")
+    _task("2", "failed", kind="upgrade")
+    assert client.get("/api/songs?status=failed").get_json()["total"] == 2
+    assert client.get("/api/songs?status=failed&kind=normal").get_json()["total"] == 1
+    assert client.get("/api/songs?status=failed&kind=upgrade").get_json()["total"] == 1
+    assert client.get("/api/songs?kind=bogus").status_code == 400

@@ -28,6 +28,7 @@ from sqlalchemy import func
 from models import (
     ACTIVE_TASK_STATUSES,
     PLATFORMS,
+    PLATFORM_NAMES,
     RUNNABLE_TASK_STATUSES,
     Account,
     DownloadTask,
@@ -1507,6 +1508,15 @@ class TaskManager:
                 account = self._account_selector.pick_for_fallback(prefer_non_vip, fee, platform=platform)
 
             if not account:
+                # 先排除「平台下根本没有启用账号」：any_monthly_available 对它
+                # 与「全部额度满」同返回 False，不先区分会误报「月额度已满」，
+                # 把用户引去调额度配置
+                if not self._account_selector._get_enabled_accounts(platform=platform):
+                    self._mark_failed(task_pk, sid, sname, artists, pl_id, pl_name,
+                                      f"未配置可用的{PLATFORM_NAMES.get(platform, platform)}账号，"
+                                      f"请在「账号管理」添加或启用账号后重试",
+                                      platform=platform)
+                    return
                 # 无可用账号三级判定：
                 # ① 全部启用账号月额度都满 → 终态化（跨月后手动重试可恢复）；
                 #    若此处不拦截，all_hourly_limited 会因循环内 continue 返回

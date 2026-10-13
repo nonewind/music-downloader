@@ -568,6 +568,8 @@ def get_songs():
         per_page (默认 20)
         status (可选: success/failed/skipped)
         keyword (可选: 搜索歌名/歌手)
+        kind (可选: normal/upgrade，任务类型；失败重试栏用 kind=normal
+              只统计「全部重试」能处理的失败记录)
     """
     page = _safe_int(request.args.get("page", 1), 1, lo=1)
     per_page = _safe_int(request.args.get("per_page", 20), 20, lo=1, hi=500)
@@ -596,6 +598,13 @@ def get_songs():
                             "msg": f"无效的 status 参数: {status}"
                                    f"（可选: success/skipped/failed）"}), 400
         query = query.filter(DownloadTask.status == mapped)
+
+    kind = request.args.get("kind", "")
+    if kind:
+        if kind not in ("normal", "upgrade"):
+            return jsonify({"code": 1,
+                            "msg": f"无效的 kind 参数: {kind}（可选: normal/upgrade）"}), 400
+        query = query.filter(DownloadTask.kind == kind)
 
     if keyword:
         like = f"%{keyword}%"
