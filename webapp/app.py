@@ -61,6 +61,7 @@ from flask import Flask, request
 
 from models import init_db, Setting
 from task_manager import TaskManager
+from organizer_manager import OrganizerManager
 from core.providers.kugou import bridge as kugou_bridge
 from core.providers.netease import bridge
 from core.providers.qq import bridge as qq_bridge
@@ -207,6 +208,10 @@ app.register_blueprint(api_bp, url_prefix="/api")
 # 初始化任务管理器
 task_manager = TaskManager(app)
 app.config["TASK_MANAGER"] = task_manager
+
+# 整理任务管理器（ORG-01）：音乐扫描后台任务化，独立于下载队列单 worker 串行
+organizer_manager = OrganizerManager(app)
+app.config["ORGANIZER_MANAGER"] = organizer_manager
 
 
 @app.after_request
@@ -382,6 +387,7 @@ def main() -> None:
     ).start()
     logger.info("API 服务转后台启动，Web 服务先行就绪")
     task_manager.start()
+    organizer_manager.start()
     logger.info("=" * 50)
     logger.info("Deen音乐下载器 Web 服务启动 (v%s)", __version__)
     if GATEWAY_SOCKET:
@@ -392,6 +398,7 @@ def main() -> None:
     try:
         serve(app, GATEWAY_SOCKET, GATEWAY_PREFIX, host, port)
     finally:
+        organizer_manager.stop()   # 先停整理 worker（等待在途扫描自然结束），再停下载队列
         task_manager.stop()
         ncm_bridge.stop()          # 主程序退出 -> 自动关闭 API 服务
         qq_bridge_inst.stop()      # 主程序退出 -> 自动关闭 QQ音乐API 服务

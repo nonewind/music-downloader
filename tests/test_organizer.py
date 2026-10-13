@@ -9,7 +9,8 @@
 6.  trash 模式（移入 .trash + Song repair 联动，quality 不动）
 7.  direct 模式（organize_direct_delete=true 直接 unlink）
 8.  trash 同名冲突（追加 _YYYYmmddHHMMSS 时间戳后缀）
-9.  POST /api/organize/scan 响应结构与目录不存在分支、403 权限风格
+9.  POST /api/organize/scan 后台任务化契约（返回 job_id）、目录不存在分支、
+    403 权限风格；分组结果改经 GET /api/organize/duplicates 读取
 """
 
 import re
@@ -546,20 +547,36 @@ def test_clean_trash_name_conflict_gets_timestamp_suffix(admin_client, tmp_path)
 
 
 # ======================================================================
-# 9. scan 端点：响应结构 / 目录不存在 / 权限
+# 9. scan 端点（ORG-01 后台任务化）：job_id 契约 / 目录不存在 / 权限
 # ======================================================================
-def test_scan_endpoint_returns_groups_and_items(admin_client, tmp_path):
+def test_scan_endpoint_returns_job_id_and_duplicates(admin_client, tmp_path):
+    """POST scan 只入队返回 job_id；分组结果经 GET duplicates 读取"""
+    from models import OrganizerJob
+    from organizer_manager import OrganizerManager
+
     out_dir = _setup_out_dir(tmp_path)
     (out_dir / "晴天-12345.mp3").write_bytes(b"a" * 100)
     (out_dir / "晴天-12345.flac").write_bytes(b"b" * 1000)
+
+    mgr = OrganizerManager(admin_client.application)
+    admin_client.application.config["ORGANIZER_MANAGER"] = mgr
 
     resp = admin_client.post("/api/organize/scan")
     body = resp.get_json()
 
     assert resp.status_code == 200
     assert body["code"] == 0
-    assert body["data"]["scanned"] == 2
-    assert body["data"]["duration_s"] >= 0
+    assert body["data"]["status"] == "pending"
+    jid = body["data"]["job_id"]
+    assert OrganizerJob.query.get(jid) is not None
+
+    mgr.run_job(jid)                        # 测试内同步执行，不依赖线程
+
+    resp = admin_client.get("/api/organize/duplicates")
+    body = resp.get_json()
+
+    assert resp.status_code == 200
+    assert body["code"] == 0
     groups = body["data"]["groups"]
     assert len(groups) == 1
     g = groups[0]
@@ -569,14 +586,20 @@ def test_scan_endpoint_returns_groups_and_items(admin_client, tmp_path):
     assert item["rel"] == item["filename"] == Path(item["path"]).name
     assert item["song_id"] == "12345"
     assert item["ext"] in (".mp3", ".flac")
-    for key in ("path", "filename", "rel", "ext", "size", "mtime", "song_id",
-                "title", "artist", "album", "duration_ms", "bitrate_kbps",
-                "sample_rate", "channels", "bits_per_sample", "lossless"):
+    assert isinstance(item["id"], int)
+    for key in ("id", "path", "filename", "rel", "ext", "size", "mtime",
+                "song_id", "title", "artist", "album", "duration_ms",
+                "bitrate_kbps", "sample_rate", "channels", "bits_per_sample",
+                "lossless", "status", "platform"):
         assert key in item
 
 
 def test_scan_endpoint_missing_dir(admin_client, tmp_path):
     from models import Setting
+    from organizer_manager import OrganizerManager
+
+    admin_client.application.config["ORGANIZER_MANAGER"] = OrganizerManager(
+        admin_client.application)
     Setting.set("output_dir", str(tmp_path / "nope"))
 
     resp = admin_client.post("/api/organize/scan")

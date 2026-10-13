@@ -163,19 +163,30 @@ def _build_entry(path: Path, ext: str) -> FileEntry:
     )
 
 
+def _raise_walk_error(err: OSError) -> None:
+    """os.walk onerror 回调：目录 scandir 失败（权限不足等）立即抛出。
+
+    绝不能沿用 os.walk 的默认静默忽略：walk 提前结束产出的"空/残缺结果"
+    会被索引层当完整成功，把未见到的行误标 missing（全库假性丢失）。
+    """
+    raise err
+
+
 def scan_directory(root: Path) -> list[FileEntry]:
     """递归扫描目录下的音频文件
 
     - 只收 AUDIO_EXTS 扩展名；
     - 剪枝跳过 .trash 与任何以 . 开头的隐藏目录（不进入）；
-    - 目录不存在/不可读时返回空列表（由端点层负责给出用户可见错误）。
+    - 根目录不存在/不可读时返回空列表（由端点层负责给出用户可见错误）；
+    - walk 中途遇到不可读目录经 onerror 直接抛 OSError（见 _raise_walk_error），
+      保证只有 walk 完整成功才返回，索引层据此才允许标 missing。
     """
     root = Path(root)
     entries: list[FileEntry] = []
     if not root.is_dir():
         logger.warning("scan_directory: 目录不存在或不可读 %s", root)
         return entries
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_raise_walk_error):
         # 原地剪枝：.trash 与隐藏目录整体跳过
         dirnames[:] = [d for d in dirnames if not d.startswith(".")]
         for name in filenames:
@@ -210,13 +221,17 @@ def file_sha1(path: Path) -> str:
     return digest.hexdigest()
 
 
-def group_duplicates(entries: list[FileEntry]) -> list[DuplicateGroup]:
+def group_duplicates(entries: list[FileEntry],
+                     hash_cache: dict | None = None) -> list[DuplicateGroup]:
     """把扫描结果分成重复组
 
     - same_id：song_id 非空的文件按 song_id 分组，组内 ≥2 个文件成组；
     - identical：排除已在 same_id 组内的文件后，按字节 size 预分组，
       同 size 且 ≥2 个的再算 SHA1，哈希一致的成组；
     - 返回的组按 items 数降序、再按组内最大 size 降序。
+
+    hash_cache：可选的 str(path) → SHA1 缓存（调用方持有并持久化）。
+    命中缓存不读盘；新算出的哈希写回缓存。传 None 时行为与无缓存完全一致。
     """
     groups: list[DuplicateGroup] = []
 
@@ -247,11 +262,15 @@ def group_duplicates(entries: list[FileEntry]) -> list[DuplicateGroup]:
             continue
         by_hash: dict[str, list[FileEntry]] = {}
         for e in candidates:
-            try:
-                digest = file_sha1(e.path)
-            except OSError as err:
-                logger.warning("计算 SHA1 失败，跳过 %s: %s", e.path, err)
-                continue
+            digest = hash_cache.get(str(e.path)) if hash_cache is not None else None
+            if digest is None:
+                try:
+                    digest = file_sha1(e.path)
+                except OSError as err:
+                    logger.warning("计算 SHA1 失败，跳过 %s: %s", e.path, err)
+                    continue
+                if hash_cache is not None:
+                    hash_cache[str(e.path)] = digest
             by_hash.setdefault(digest, []).append(e)
         for items in by_hash.values():
             if len(items) < 2:

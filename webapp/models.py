@@ -5,6 +5,8 @@
 - Playlist：关注的歌单/榜单
 - Song：已下载歌曲记录（去重依据）
 - DownloadTask：下载任务（实时进度 + 失败列表）
+- OrganizerJob：整理任务（音乐扫描/清理，独立于下载队列）
+- LocalAudioFile：本地音频文件索引（最近一次成功扫描时的磁盘状态）
 - Setting：配置项 key-value
 """
 
@@ -247,6 +249,69 @@ class Setting(db.Model):
     @classmethod
     def get_all(cls) -> dict:
         return {item.key: item.value for item in cls.query.all()}
+
+
+class OrganizerJob(db.Model):
+    """整理任务（扫描/清理），独立于下载队列，单 Worker 串行执行
+
+    status: pending / running / success / partial / failed / interrupted
+        pending / running          在途（ORGANIZER_JOB_ACTIVE_STATUSES）
+        success / partial / failed  终态
+        interrupted                服务重启时被中断（不自动重试）
+    progress: 0-100，无法度量时保持真实值不虚构
+    result: JSON 摘要（成功时写入，见 OrganizerManager._execute_scan）
+    """
+    __tablename__ = "organizer_jobs"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    job_type = db.Column(db.String(20), nullable=False, default="scan")  # scan | clean（清理复用）
+    status = db.Column(db.String(20), nullable=False, default="pending", index=True)
+    progress = db.Column(db.Integer, nullable=False, default=0)   # 0-100
+    processed = db.Column(db.Integer, nullable=False, default=0)
+    total = db.Column(db.Integer, nullable=False, default=0)
+    error_msg = db.Column(db.Text, nullable=True)
+    result = db.Column(db.Text, nullable=True)                    # JSON 摘要
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    started_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+
+
+# 在途整理任务状态：submit_scan 查重（拒绝并发第二个任务）、
+# 启动恢复（pending/running → interrupted）共用，新增在途状态只改这里
+ORGANIZER_JOB_ACTIVE_STATUSES = ("pending", "running")
+
+
+class LocalAudioFile(db.Model):
+    """本地音频文件索引：代表最近一次成功扫描时的磁盘状态，不是歌曲身份
+
+    path: 绝对路径（output_dir 已 resolve，walk 产物直接 str()）
+    status: active | missing | trashed | cleaned
+        （trashed/cleaned 由清理任务使用；扫描只写 active/missing。
+         missing 仅在 walk 完整成功后才允许标记，中途异常绝不触碰）
+    content_hash: SHA1 十六进制，重复分组时惰性计算，文件变化时清空
+    platform: 关联 songs 的平台标识（本阶段恒为 NULL，后续关联后回填）
+    """
+    __tablename__ = "local_audio_files"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    path = db.Column(db.String(500), nullable=False, unique=True, index=True)
+    size = db.Column(db.Integer, nullable=False, default=0)
+    mtime = db.Column(db.Float, nullable=False, default=0.0)
+    status = db.Column(db.String(20), nullable=False, default="active", index=True)
+    ext = db.Column(db.String(10), nullable=False, default="")
+    lossless = db.Column(db.Boolean, nullable=False, default=False)
+    duration_ms = db.Column(db.Integer, nullable=False, default=0)
+    bitrate_kbps = db.Column(db.Integer, nullable=False, default=0)
+    sample_rate = db.Column(db.Integer, nullable=False, default=0)
+    channels = db.Column(db.Integer, nullable=False, default=0)
+    bits_per_sample = db.Column(db.Integer, nullable=False, default=0)
+    title = db.Column(db.String(300), nullable=False, default="")
+    artist = db.Column(db.String(300), nullable=False, default="")
+    album = db.Column(db.String(300), nullable=False, default="")
+    song_id = db.Column(db.String(64), nullable=True, index=True)   # 文件名解析的平台歌曲 ID，解析不出为 NULL
+    platform = db.Column(db.String(20), nullable=True, index=True)
+    content_hash = db.Column(db.String(64), nullable=True)
+    last_scan_job_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.now)
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class User(db.Model):

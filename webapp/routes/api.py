@@ -31,14 +31,17 @@
 - POST   /api/ncm/qr/create       生成网易云扫码登录二维码
 - POST   /api/ncm/qr/check        轮询网易云扫码登录状态（成功含 cookie）
 - POST   /api/accounts/<aid>/test 测试账号登录（netease/qq 平台）
-- POST   /api/organize/scan       扫描下载目录找出重复音乐文件（仅管理员）
+- POST   /api/organize/scan       触发后台扫描任务，立即返回 job_id（仅管理员）
+- GET    /api/organize/jobs/<id>  查询整理任务进度与结果摘要（仅管理员）
+- GET    /api/organize/state      整理总览：活跃任务/最近扫描/索引统计（仅管理员）
+- GET    /api/organize/files      本地音频文件索引分页列表（仅管理员）
+- GET    /api/organize/duplicates 重复文件分组（基于索引 + 惰性哈希，仅管理员）
 - POST   /api/organize/clean      清理选中的重复文件（回收站/直接删除，仅管理员）
 """
 
 import logging
 import shutil
 import sys
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import json as _json
@@ -47,9 +50,10 @@ from flask import Blueprint, current_app, jsonify, request, Response, session
 from sqlalchemy import func
 
 from auth import current_user
-from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES
+from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, LocalAudioFile
 from core.providers.base import MusicProvider
-from core.organizer import scan_directory, group_duplicates
+from core.organizer import FileEntry, group_duplicates
+from organizer_manager import OrganizerBusyError
 from core.providers.netease.parse_links import parse_playlist_id
 from core.providers.kugou import bridge as kugou_bridge
 from core.providers.kugou.client import register_gcid
@@ -2035,81 +2039,201 @@ def _move_to_trash(path: Path, out_dir: Path) -> Path:
     return target
 
 
+# ======================================================================
+# 音乐整理（后台扫描任务 / 本地文件索引 / 重复分组）
+# ----------------------------------------------------------------------
+# ORG-01：scan 由同步执行改为后台任务（OrganizerManager 单 worker 串行），
+# 本端点只入队并立即返回 job_id；进度经 /organize/jobs/<id> 轮询，
+# 结果经 /organize/duplicates 读取。clean 不受影响。
+# ======================================================================
+_ORGANIZE_FILE_STATUSES = ("active", "missing", "trashed", "cleaned")
+
+
+def _organize_row_item(row, out_dir: Path) -> dict:
+    """LocalAudioFile 行 → 整理接口 item 字段（files 与 duplicates 共用）"""
+    p = Path(row.path)
+    try:
+        rel = p.relative_to(out_dir).as_posix()
+    except ValueError:
+        rel = p.as_posix()
+    return {
+        "id": row.id,
+        "path": row.path,
+        "rel": rel,
+        "filename": p.name,
+        "ext": row.ext,
+        "size": row.size,
+        "mtime": row.mtime,
+        "status": row.status,
+        "lossless": bool(row.lossless),
+        "duration_ms": row.duration_ms,
+        "bitrate_kbps": row.bitrate_kbps,
+        "sample_rate": row.sample_rate,
+        "channels": row.channels,
+        "bits_per_sample": row.bits_per_sample,
+        "title": row.title,
+        "artist": row.artist,
+        "album": row.album,
+        "song_id": row.song_id,
+        "platform": row.platform,
+    }
+
+
+def _organize_job_dict(job) -> dict:
+    """OrganizerJob 行 → 前端 dict（时间格式与 DownloadTask.to_dict 一致）"""
+    try:
+        result = _json.loads(job.result) if job.result else None
+    except (TypeError, ValueError):
+        result = None                            # 脏数据原样置 None，不让接口 500
+    return {
+        "id": job.id,
+        "job_type": job.job_type,
+        "status": job.status,
+        "progress": job.progress,
+        "processed": job.processed,
+        "total": job.total,
+        "error_msg": job.error_msg,
+        "result": result,
+        "created_at": job.created_at.strftime("%Y-%m-%d %H:%M:%S") if job.created_at else None,
+        "started_at": job.started_at.strftime("%Y-%m-%d %H:%M:%S") if job.started_at else None,
+        "finished_at": job.finished_at.strftime("%Y-%m-%d %H:%M:%S") if job.finished_at else None,
+    }
+
+
 @api_bp.route("/organize/scan", methods=["POST"])
 def organize_scan():
-    """扫描下载目录，找出重复音乐文件（仅管理员，同步执行，只读不写）
+    """触发后台扫描任务（仅管理员，立即返回不等待执行）
 
-    响应 data：
-        scanned:    扫描到的音频文件总数
-        duration_s: 扫描+分组耗时（秒）
-        groups:     [{group_type: "same_id"|"identical", recommended: 保留路径,
-                      items: [{path, filename, rel, ext, size, mtime, song_id,
-                               title, artist, album, duration_ms, bitrate_kbps,
-                               sample_rate, channels, bits_per_sample, lossless}]}]
+    响应 data：{"job_id": int, "status": "pending"}
+    重复提交（已有 pending/running 整理任务）与下载目录不存在均返回 code:1。
+    """
+    err = _require_admin()
+    if err:
+        return err
+    if current_app.config.get("ORGANIZER_MANAGER") is None:
+        return jsonify({"code": 1, "msg": "整理服务未初始化"})
+    try:
+        job = current_app.config["ORGANIZER_MANAGER"].submit_scan()
+    except OrganizerBusyError as e:
+        return jsonify({"code": 1, "msg": str(e)})
+    except ValueError as e:
+        return jsonify({"code": 1, "msg": str(e)})
+    return jsonify({"code": 0, "data": {"job_id": job.id, "status": job.status}})
+
+
+@api_bp.route("/organize/jobs/<int:job_id>")
+def organize_job_detail(job_id: int):
+    """查询整理任务详情（进度 / result JSON 摘要，仅管理员）"""
+    err = _require_admin()
+    if err:
+        return err
+    job = OrganizerJob.query.get(job_id)
+    if job is None:
+        return jsonify({"code": 1, "msg": "任务不存在"})
+    return jsonify({"code": 0, "data": {"job": _organize_job_dict(job)}})
+
+
+@api_bp.route("/organize/state")
+def organize_state():
+    """整理总览：活跃任务 / 最近一次扫描（任意终态）/ 索引统计（仅管理员）"""
+    err = _require_admin()
+    if err:
+        return err
+    active = OrganizerJob.query.filter(
+        OrganizerJob.status.in_(ORGANIZER_JOB_ACTIVE_STATUSES),
+    ).order_by(OrganizerJob.id.desc()).first()
+    last_scan = OrganizerJob.query.filter(
+        OrganizerJob.job_type == "scan",
+        OrganizerJob.status.notin_(ORGANIZER_JOB_ACTIVE_STATUSES),
+    ).order_by(OrganizerJob.id.desc()).first()
+    return jsonify({
+        "code": 0,
+        "data": {
+            "active_job": _organize_job_dict(active) if active else None,
+            "last_scan": _organize_job_dict(last_scan) if last_scan else None,
+            "index": {
+                "total": LocalAudioFile.query.count(),
+                "active": LocalAudioFile.query.filter_by(status="active").count(),
+                "missing": LocalAudioFile.query.filter_by(status="missing").count(),
+            },
+        },
+    })
+
+
+@api_bp.route("/organize/files")
+def organize_files():
+    """本地音频文件索引分页列表（仅管理员）
+
+    query：status（默认 active，all=不过滤）、offset（默认 0）、limit（默认 200，上限 500）
     """
     err = _require_admin()
     if err:
         return err
     out_dir = _resolve_output_dir()
-    if not out_dir.is_dir():
-        return jsonify({"code": 1, "msg": "下载目录不存在"})
+    status = (request.args.get("status") or "active").strip().lower()
+    offset = _safe_int(request.args.get("offset"), 0, lo=0)
+    limit = _safe_int(request.args.get("limit"), 200, lo=1, hi=500)
 
-    started = time.perf_counter()
-    try:
-        entries = scan_directory(out_dir)
-        groups = group_duplicates(entries)
-    except Exception as e:
-        logger.exception("音乐整理扫描失败: %s", e)
-        return jsonify({"code": 1, "msg": f"扫描失败: {e}"})
-    duration_s = round(time.perf_counter() - started, 3)
+    query = LocalAudioFile.query
+    if status != "all":
+        query = query.filter(LocalAudioFile.status == status)
+    total = query.count()
+    rows = query.order_by(LocalAudioFile.path).offset(offset).limit(limit).all()
+    return jsonify({
+        "code": 0,
+        "data": {
+            "total": total,
+            "items": [_organize_row_item(r, out_dir) for r in rows],
+        },
+    })
 
-    item_cache: dict[str, dict] = {}
 
-    def _item(entry) -> dict:
-        key = str(entry.path)
-        if key not in item_cache:
-            try:
-                rel = entry.path.relative_to(out_dir).as_posix()
-            except ValueError:
-                rel = Path(entry.path).as_posix()
-            item_cache[key] = {
-                "path": str(entry.path),
-                "filename": entry.path.name,
-                "rel": rel,
-                "ext": entry.ext,
-                "size": entry.size,
-                "mtime": entry.mtime,
-                "song_id": entry.song_id,
-                "title": entry.title,
-                "artist": entry.artist,
-                "album": entry.album,
-                "duration_ms": entry.duration_ms,
-                "bitrate_kbps": entry.bitrate_kbps,
-                "sample_rate": entry.sample_rate,
-                "channels": entry.channels,
-                "bits_per_sample": entry.bits_per_sample,
-                "lossless": entry.lossless,
-            }
-        return item_cache[key]
+@api_bp.route("/organize/duplicates")
+def organize_duplicates():
+    """重复文件分组（基于索引中的 active 行，仅管理员）
 
+    与扫描共用 group_duplicates：same_id 优先，identical 按字节级；SHA1 经
+    content_hash 惰性缓存（命中不读盘，新算结果回写行）。组排序沿用
+    group_duplicates 现状（items 数降序 → 组内最大 size 降序）。
+    """
+    err = _require_admin()
+    if err:
+        return err
+    out_dir = _resolve_output_dir()
+    rows = LocalAudioFile.query.filter_by(status="active").all()
+    entries = [
+        FileEntry(
+            path=Path(r.path), size=r.size, mtime=r.mtime, ext=r.ext,
+            song_id=r.song_id, title=r.title, artist=r.artist, album=r.album,
+            duration_ms=r.duration_ms, bitrate_kbps=r.bitrate_kbps,
+            sample_rate=r.sample_rate, channels=r.channels,
+            bits_per_sample=r.bits_per_sample, lossless=r.lossless,
+        )
+        for r in rows
+    ]
+    hash_cache = {r.path: r.content_hash for r in rows if r.content_hash}
+    groups = group_duplicates(entries, hash_cache=hash_cache)
+    # 新算出的哈希回写索引行，下次分组免读盘
+    rows_by_path = {r.path: r for r in rows}
+    hash_dirty = False
+    for p, digest in hash_cache.items():
+        row = rows_by_path.get(p)
+        if row is not None and row.content_hash != digest:
+            row.content_hash = digest
+            hash_dirty = True
+    if hash_dirty:
+        db.session.commit()
+
+    items_by_path = {r.path: _organize_row_item(r, out_dir) for r in rows}
     data_groups = [
         {
             "group_type": g.group_type,
             "recommended": g.recommended,
-            "items": [_item(e) for e in g.items],
+            "items": [items_by_path[str(e.path)] for e in g.items],
         }
         for g in groups
     ]
-    logger.info("音乐整理扫描: 目录=%s 文件=%d 重复组=%d 耗时=%.2fs",
-                out_dir, len(entries), len(groups), duration_s)
-    return jsonify({
-        "code": 0,
-        "data": {
-            "scanned": len(entries),
-            "duration_s": duration_s,
-            "groups": data_groups,
-        },
-    })
+    return jsonify({"code": 0, "data": {"groups": data_groups}})
 
 
 @api_bp.route("/organize/clean", methods=["POST"])
