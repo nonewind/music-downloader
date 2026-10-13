@@ -66,7 +66,7 @@ def fake_audio_factory(monkeypatch):
 
 
 def _entry(path, size=None, lossless=False, sample_rate=0, bits_per_sample=0,
-           bitrate_kbps=0, song_id=None):
+           bitrate_kbps=0, song_id=None, platform=None):
     """按真实文件构造 FileEntry（song_id 缺省时从文件名提取）"""
     p = Path(path)
     st = p.stat()
@@ -76,6 +76,7 @@ def _entry(path, size=None, lossless=False, sample_rate=0, bits_per_sample=0,
         mtime=st.st_mtime,
         ext=p.suffix.lower(),
         song_id=extract_song_id(p.stem) if song_id is None else song_id,
+        platform=platform,
         lossless=lossless,
         sample_rate=sample_rate,
         bits_per_sample=bits_per_sample,
@@ -201,14 +202,18 @@ def test_group_duplicates_same_id_prefers_higher_spec(tmp_path):
     flac = tmp_path / "晴天-12345.flac"
     flac.write_bytes(b"b" * 1000)
 
-    groups = group_duplicates([_entry(mp3, bitrate_kbps=128),
+    # ORG-02：same_id 确定组须 (platform, song_id) 双可信
+    groups = group_duplicates([_entry(mp3, bitrate_kbps=128, platform="netease"),
                                _entry(flac, lossless=True, sample_rate=44100,
-                                      bits_per_sample=16)])
+                                      bits_per_sample=16, platform="netease")])
 
     assert len(groups) == 1
     g = groups[0]
     assert g.group_type == "same_id"
+    assert g.platform == "netease"
+    assert g.song_id == "12345"
     assert g.recommended == str(flac)       # 组内规格最高（无损）为推荐保留
+    assert "无损" in g.reason
     assert {i.path for i in g.items} == {mp3, flac}
 
 
@@ -237,8 +242,25 @@ def test_group_duplicates_empty_when_all_unique(tmp_path):
     assert group_duplicates([_entry(a), _entry(b)]) == []
 
 
+def test_same_song_id_different_platforms_not_merged(tmp_path):
+    """ORG-02 核心缺陷修复：netease 与 qq 的同 song_id 是两首歌，
+    不得合并进同一个确定组（也不得并入候选组）"""
+    a = tmp_path / "晴天-18886.mp3"
+    a.write_bytes(b"a" * 100)
+    b = tmp_path / "晴天-18886.flac"
+    b.write_bytes(b"b" * 1000)
+
+    groups = group_duplicates([
+        _entry(a, platform="netease"),
+        _entry(b, platform="qq"),
+    ])
+
+    assert groups == []                     # 各自单独不成组
+
+
 def test_same_id_files_do_not_reenter_identical_group(tmp_path):
-    """same_id 组内文件即使字节级相同，也不再进 identical 组"""
+    """ID 组（含无平台的 same_id_candidate）内文件即使字节级相同，
+    也不再进 identical 组"""
     a = tmp_path / "晴天-12345.mp3"
     a.write_bytes(b"SAMEDATA" * 5)
     b = tmp_path / "爱-12345.mp3"
@@ -247,7 +269,9 @@ def test_same_id_files_do_not_reenter_identical_group(tmp_path):
     groups = group_duplicates([_entry(a), _entry(b)])
 
     assert len(groups) == 1
-    assert groups[0].group_type == "same_id"
+    # ORG-02：无平台可信身份 → 候选组（不再按裸 song_id 出 same_id 确定组）
+    assert groups[0].group_type == "same_id_candidate"
+    assert groups[0].platform is None
 
 
 def test_group_duplicates_sorted_by_count_then_max_size(tmp_path):
@@ -580,17 +604,23 @@ def test_scan_endpoint_returns_job_id_and_duplicates(admin_client, tmp_path):
     groups = body["data"]["groups"]
     assert len(groups) == 1
     g = groups[0]
-    assert g["group_type"] == "same_id"
+    # ORG-02：无下载历史、仅文件名解析的裸 song_id → 候选组（非确定组）
+    assert g["group_type"] == "same_id_candidate"
+    assert g["platform"] is None
+    assert g["song_id"] == "12345"
+    assert "reason" in g
     assert g["recommended"].endswith(".flac")
     item = g["items"][0]
     assert item["rel"] == item["filename"] == Path(item["path"]).name
     assert item["song_id"] == "12345"
+    assert item["downloads"]["count"] == 0
+    assert item["downloads"]["latest"] is None
     assert item["ext"] in (".mp3", ".flac")
     assert isinstance(item["id"], int)
     for key in ("id", "path", "filename", "rel", "ext", "size", "mtime",
                 "song_id", "title", "artist", "album", "duration_ms",
                 "bitrate_kbps", "sample_rate", "channels", "bits_per_sample",
-                "lossless", "status", "platform"):
+                "lossless", "status", "platform", "downloads"):
         assert key in item
 
 

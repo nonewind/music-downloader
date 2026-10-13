@@ -9,10 +9,15 @@
   以 . 开头的隐藏目录；
 - 单个文件元数据读取失败不中断扫描：参数置 0、tag 置空、logger.warning，
   文件仍入列表（整理决策可继续用 size/文件名）；
-- group_duplicates 中 same_id 优先：已进 same_id 组的文件不再参与
-  identical（字节级）分组，避免同一文件出现在两个组里；
+- group_duplicates 中 ID 组优先：已进任何 ID 组（same_id /
+  same_id_candidate）的文件不再参与 identical（字节级）分组，避免同一
+  文件出现在两个组里；
+- same_id 组要求 (platform, song_id) 双可信（下载历史回填的身份，ORG-02）；
+  仅有文件名解析出的裸 song_id（平台未知）只进 same_id_candidate 候选组，
+  不同平台的同 ID 绝不合并；
 - spec_rank 是规格等级排序键（越高越好）：无损按采样率/位深，有损按码率，
-  同级取大文件、再取更新的 mtime。
+  同级取大文件、再取更新的 mtime；recommend_reason 沿同一轴序输出推荐
+  保留的第一决定性依据。
 """
 
 from __future__ import annotations
@@ -53,7 +58,8 @@ class FileEntry:
     size: int = 0
     mtime: float = 0.0
     ext: str = ""
-    song_id: str | None = None      # 从文件名尾部 -ID 提取（无则为 None）
+    song_id: str | None = None      # 文件名尾部 -ID 提取，或下载历史回填的可信 ID
+    platform: str | None = None     # 可信平台（下载历史回填，ORG-02）；None=未知
     title: str = ""
     artist: str = ""
     album: str = ""
@@ -67,10 +73,14 @@ class FileEntry:
 
 @dataclass
 class DuplicateGroup:
-    """一组重复文件：same_id（同平台歌曲 ID）或 identical（字节级相同）"""
-    group_type: str = "identical"   # "same_id" | "identical"
+    """一组重复文件：same_id（同平台歌曲 ID）/ same_id_candidate（裸 song_id
+    候选）/ identical（字节级相同）"""
+    group_type: str = "identical"   # "same_id" | "same_id_candidate" | "identical"
     items: list = field(default_factory=list)
     recommended: str = ""           # 推荐保留的 path（组内规格最高）
+    platform: str | None = None     # 确定身份组的平台；候选/identical 组为 None
+    song_id: str | None = None      # 组身份 song_id；identical 组为 None
+    reason: str = ""                # 推荐保留理由（recommend_reason 产物）
 
 
 def extract_song_id(stem: str) -> str | None:
@@ -221,40 +231,89 @@ def file_sha1(path: Path) -> str:
     return digest.hexdigest()
 
 
+def recommend_reason(winner: FileEntry, items: list[FileEntry]) -> str:
+    """推荐保留理由：按 spec_rank 轴序输出 winner 胜出的第一决定性依据
+
+    纯函数、无 IO、确定性、不虚构：winner 在某轴是组内唯一最大值（严格
+    大于其余所有项）即视为该轴胜出；与他人并列则跳到下一轴；全部轴并列
+    （或 items 只有 winner 一个）返回兜底文案。
+    """
+    others = [e for e in items if e is not winner]
+    if not others:
+        return "规格相同，任选其一"
+    if winner.lossless and not any(e.lossless for e in others):
+        return "唯一无损版本"
+    if all(winner.sample_rate > e.sample_rate for e in others):
+        return f"采样率更高 {winner.sample_rate / 1000:g}kHz"
+    if all(winner.bits_per_sample > e.bits_per_sample for e in others):
+        return f"位深更高 {winner.bits_per_sample}bit"
+    if all(winner.bitrate_kbps > e.bitrate_kbps for e in others):
+        return f"码率更高 {winner.bitrate_kbps}kbps"
+    if all(winner.size > e.size for e in others):
+        return f"文件更大 {winner.size / 1048576:.1f}MB"
+    if all(winner.mtime > e.mtime for e in others):
+        return "文件更新"
+    return "规格相同，任选其一"
+
+
+def _make_group(group_type: str, items: list[FileEntry],
+                platform: str | None = None,
+                song_id: str | None = None) -> DuplicateGroup:
+    """构造重复组：组内规格最高者为 recommended，并生成推荐理由"""
+    winner = max(items, key=spec_rank)
+    return DuplicateGroup(
+        group_type=group_type,
+        items=items,
+        recommended=str(winner.path),
+        platform=platform,
+        song_id=song_id,
+        reason=recommend_reason(winner, items),
+    )
+
+
 def group_duplicates(entries: list[FileEntry],
                      hash_cache: dict | None = None) -> list[DuplicateGroup]:
-    """把扫描结果分成重复组
+    """把扫描结果分成重复组（ORG-02 语义：平台可信身份优先）
 
-    - same_id：song_id 非空的文件按 song_id 分组，组内 ≥2 个文件成组；
-    - identical：排除已在 same_id 组内的文件后，按字节 size 预分组，
-      同 size 且 ≥2 个的再算 SHA1，哈希一致的成组；
-    - 返回的组按 items 数降序、再按组内最大 size 降序。
+    - same_id（确定身份组）：platform 与 song_id 均非空的文件按
+      (platform, song_id) 分组——不同平台的同 ID 绝不合并；
+    - same_id_candidate（候选组）：仅有裸 song_id（platform 为空，通常来自
+      文件名解析）的文件按 song_id 分组，平台未知仅供人工确认；
+    - identical：排除已进任何 ID 组的文件后，按字节 size 预分组，同 size
+      且 ≥2 个的再算 SHA1，哈希一致的成组；
+    - 各类组内 ≥2 个文件才成组；返回的组按 items 数降序、再按组内最大
+      size 降序。
 
     hash_cache：可选的 str(path) → SHA1 缓存（调用方持有并持久化）。
     命中缓存不读盘；新算出的哈希写回缓存。传 None 时行为与无缓存完全一致。
     """
     groups: list[DuplicateGroup] = []
 
-    # ---- same_id 组 ----
-    by_id: dict[str, list[FileEntry]] = {}
+    # ---- ID 组：确定身份 (platform, song_id) 与候选裸 song_id 分开收敛 ----
+    by_platform_id: dict[tuple[str, str], list[FileEntry]] = {}
+    by_bare_id: dict[str, list[FileEntry]] = {}
     for e in entries:
-        if e.song_id:
-            by_id.setdefault(e.song_id, []).append(e)
-    in_same_id: set[Path] = set()
-    for items in by_id.values():
+        if e.song_id and e.platform:
+            by_platform_id.setdefault((e.platform, e.song_id), []).append(e)
+        elif e.song_id:
+            by_bare_id.setdefault(e.song_id, []).append(e)
+    in_id_group: set[Path] = set()
+    for (platform, song_id), items in by_platform_id.items():
         if len(items) < 2:
             continue
-        groups.append(DuplicateGroup(
-            group_type="same_id",
-            items=items,
-            recommended=str(max(items, key=spec_rank).path),
-        ))
-        in_same_id.update(i.path for i in items)
+        groups.append(_make_group("same_id", items,
+                                  platform=platform, song_id=song_id))
+        in_id_group.update(i.path for i in items)
+    for song_id, items in by_bare_id.items():
+        if len(items) < 2:
+            continue
+        groups.append(_make_group("same_id_candidate", items, song_id=song_id))
+        in_id_group.update(i.path for i in items)
 
-    # ---- identical 组（排除已进 same_id 组的文件）----
+    # ---- identical 组（排除已进任何 ID 组的文件）----
     by_size: dict[int, list[FileEntry]] = {}
     for e in entries:
-        if e.path in in_same_id:
+        if e.path in in_id_group:
             continue
         by_size.setdefault(e.size, []).append(e)
     for candidates in by_size.values():
@@ -275,11 +334,7 @@ def group_duplicates(entries: list[FileEntry],
         for items in by_hash.values():
             if len(items) < 2:
                 continue
-            groups.append(DuplicateGroup(
-                group_type="identical",
-                items=items,
-                recommended=str(max(items, key=spec_rank).path),
-            ))
+            groups.append(_make_group("identical", items))
 
     groups.sort(key=lambda g: (-len(g.items), -max(i.size for i in g.items)))
     return groups

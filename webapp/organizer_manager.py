@@ -7,6 +7,8 @@
    变化重读、消失标 missing（只在 walk 完整成功后标记）
 3. 重复分组沿用 core.organizer.group_duplicates，SHA1 经 content_hash
    惰性缓存：命中不读盘，新算结果回写行
+4. 关联回填（ORG-02）：扫描内用 DownloadTask / Song 的 file_path 命中
+   给索引行回填可信身份 (platform, song_id)（只读任务/Song 表）
 
 线程安全说明（与 task_manager 同款约束）：
 - Flask 多线程下 SQLAlchemy session 需在子线程内创建/销毁
@@ -26,9 +28,11 @@ from pathlib import Path
 from core.organizer import FileEntry, group_duplicates, scan_directory
 from models import (
     ORGANIZER_JOB_ACTIVE_STATUSES,
+    DownloadTask,
     LocalAudioFile,
     OrganizerJob,
     Setting,
+    Song,
     db,
 )
 
@@ -40,6 +44,19 @@ if getattr(sys, "frozen", False):
     _ROOT = Path(sys.executable).resolve().parent
 else:
     _ROOT = Path(__file__).resolve().parent.parent
+
+
+def _norm_lookup_path(raw: str) -> str | None:
+    """路径归一化为关联查找键：与 routes/api._same_file_path 同规则
+    （Path.resolve 比较，归一 ..、分隔符与软链接）。
+    resolve 失败（OSError 等）返回 None，调用方跳过该行——宁可不关联、
+    不误关联；与 api._same_file_path 失败时回退字符串比较不同，此处直接
+    跳过是刻意的保守选择（关联错平台/错歌曲的代价高于漏关联）。
+    """
+    try:
+        return str(Path(raw).resolve())
+    except (OSError, ValueError):
+        return None
 
 # 进度落库节奏：每 N 个文件或每 1 秒 commit 一次（取先到者），避免逐条 commit
 _PROGRESS_COMMIT_EVERY = 25
@@ -203,6 +220,54 @@ class OrganizerManager:
     # ------------------------------------------------------------------
     # 扫描核心
     # ------------------------------------------------------------------
+    def _backfill_associations(self) -> None:
+        """扫描内关联回填（ORG-02）：下载历史的 file_path 命中 → 给
+        LocalAudioFile 行回填可信身份 (platform, song_id)
+
+        - 任务映射优先于 Song 映射（任务带下载时刻快照，更接近真实下载行为）；
+        - 同一路径多条任务取最新一条（updated_at → created_at → pk 降序，
+          与 routes/api.py 既有"最新快照"判定同规则）；
+        - 两者都不命中时保守保留原值：历史关联不因一次未命中清除（文件可能
+          处于改名/移动的中间态，一次扫描缺席不代表历史无效），本函数只做
+          可信覆盖、绝不擦除；文件名解析 song_id 只在增量同步步骤作初值；
+        - 本步骤只写 LocalAudioFile，DownloadTask / Song 零写入。
+
+        调用方须已在 app context 内；提交随 _execute_scan 既有批量 commit。
+        """
+        task_map: dict[str, tuple[str, str]] = {}
+        # 写路径仅在任务 done 时落 file_path（task_manager.py:1785/1806），
+        # 此处过滤是防御存量库/异常行：非 done 行的路径不作为该文件的
+        # 下载历史事实
+        tasks = DownloadTask.query.filter(
+            DownloadTask.file_path != "",
+            DownloadTask.status == "done",
+        ).order_by(DownloadTask.updated_at.desc(),
+                   DownloadTask.created_at.desc(),
+                   DownloadTask.pk.desc()).all()
+        for t in tasks:
+            key = _norm_lookup_path(t.file_path)
+            if key is not None:
+                task_map.setdefault(key, (t.platform, t.song_id))
+
+        song_map: dict[str, tuple[str, str]] = {}
+        songs = Song.query.filter(
+            Song.file_path != "",
+            Song.status == "success",
+        ).order_by(Song.platform.asc(), Song.id.asc()).all()
+        for s in songs:
+            key = _norm_lookup_path(s.file_path)
+            if key is not None:
+                song_map.setdefault(key, (s.platform, s.id))
+
+        rows = LocalAudioFile.query.filter_by(status="active").all()
+        for row in rows:
+            key = _norm_lookup_path(row.path)
+            if key is None:
+                continue
+            hit = task_map.get(key) or song_map.get(key)
+            if hit:
+                row.platform, row.song_id = hit
+
     def _resolve_output_dir(self) -> Path:
         """解析下载输出目录。规则与 routes/api._resolve_output_dir 保持一致
         （Setting 相对路径基于项目根；frozen 包基于 exe 同级目录）。刻意不复用
@@ -303,6 +368,11 @@ class OrganizerManager:
         n_missing = len(missing_rows)
         db.session.commit()
 
+        # 3.5 关联回填（ORG-02）：任务/Song 的 file_path 命中 → 可信身份
+        #     覆盖（只写索引行，不擦除历史关联）。无独立 commit，随下方
+        #     步骤 4 的批量提交落库。
+        self._backfill_associations()
+
         # 4. 分组：active 行重组为 FileEntry，SHA1 经 content_hash 惰性复用，
         #    新算出的哈希回写行（供下次分组免读盘）
         active_rows = LocalAudioFile.query.filter_by(status="active").all()
@@ -311,7 +381,8 @@ class OrganizerManager:
         file_entries = [
             FileEntry(
                 path=Path(r.path), size=r.size, mtime=r.mtime, ext=r.ext,
-                song_id=r.song_id, title=r.title, artist=r.artist,
+                song_id=r.song_id, platform=r.platform, title=r.title,
+                artist=r.artist,
                 album=r.album, duration_ms=r.duration_ms,
                 bitrate_kbps=r.bitrate_kbps, sample_rate=r.sample_rate,
                 channels=r.channels, bits_per_sample=r.bits_per_sample,
@@ -327,7 +398,7 @@ class OrganizerManager:
                 row.content_hash = digest
         db.session.commit()
 
-        groups_summary = {"same_id": 0, "identical": 0}
+        groups_summary = {"same_id": 0, "same_id_candidate": 0, "identical": 0}
         dup_files: set[str] = set()
         for g in groups:
             groups_summary[g.group_type] = groups_summary.get(g.group_type, 0) + 1

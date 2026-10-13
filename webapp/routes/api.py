@@ -2188,13 +2188,61 @@ def organize_files():
     })
 
 
+def _organize_downloads_index() -> tuple[dict[str, int], dict[str, DownloadTask]]:
+    """下载历史索引（只读任务表，ORG-02）：resolve 后路径 → (命中任务数, 最新任务)
+
+    最新判定与 api 内既有"最新快照"规则一致（updated_at → created_at → pk
+    降序）；resolve 失败（OSError/ValueError）的行跳过。
+    """
+    counts: dict[str, int] = {}
+    latest: dict[str, DownloadTask] = {}
+    tasks = DownloadTask.query.filter(
+        DownloadTask.file_path != "",
+        DownloadTask.status == "done",
+    ).order_by(DownloadTask.updated_at.desc(), DownloadTask.created_at.desc(),
+               DownloadTask.pk.desc()).all()
+    for t in tasks:
+        try:
+            key = str(Path(t.file_path).resolve())
+        except (OSError, ValueError):
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        latest.setdefault(key, t)               # 排序后先遇到的是最新任务
+    return counts, latest
+
+
+def _organize_downloads_item(path: str, counts: dict[str, int],
+                             latest: dict[str, DownloadTask]) -> dict:
+    """单文件下载历史摘要：{"count": 命中任务数, "latest": 最新任务或 None}
+
+    created_at 序列化格式与 /api/tasks（DownloadTask.to_dict）一致。
+    """
+    try:
+        key = str(Path(path).resolve())
+    except (OSError, ValueError):
+        return {"count": 0, "latest": None}
+    t = latest.get(key)
+    return {
+        "count": counts.get(key, 0),
+        "latest": {
+            "task_id": t.pk,
+            "song_name": t.song_name,
+            "quality": t.quality,
+            "created_at": t.created_at.strftime("%Y-%m-%d %H:%M:%S") if t.created_at else None,
+        } if t is not None else None,
+    }
+
+
 @api_bp.route("/organize/duplicates")
 def organize_duplicates():
     """重复文件分组（基于索引中的 active 行，仅管理员）
 
-    与扫描共用 group_duplicates：same_id 优先，identical 按字节级；SHA1 经
-    content_hash 惰性缓存（命中不读盘，新算结果回写行）。组排序沿用
-    group_duplicates 现状（items 数降序 → 组内最大 size 降序）。
+    与扫描共用 group_duplicates（ORG-02 语义）：确定身份组按
+    (platform, song_id)，仅有裸 song_id 的进 same_id_candidate 候选组，
+    identical 按字节级；SHA1 经 content_hash 惰性缓存（命中不读盘，新算
+    结果回写行）。组排序沿用 group_duplicates 现状（items 数降序 → 组内
+    最大 size 降序）。每组携带 platform/song_id/reason；每个 item 附
+    downloads（该路径命中的下载历史计数与最新任务摘要，只读任务表）。
     """
     err = _require_admin()
     if err:
@@ -2204,7 +2252,8 @@ def organize_duplicates():
     entries = [
         FileEntry(
             path=Path(r.path), size=r.size, mtime=r.mtime, ext=r.ext,
-            song_id=r.song_id, title=r.title, artist=r.artist, album=r.album,
+            song_id=r.song_id, platform=r.platform, title=r.title,
+            artist=r.artist, album=r.album,
             duration_ms=r.duration_ms, bitrate_kbps=r.bitrate_kbps,
             sample_rate=r.sample_rate, channels=r.channels,
             bits_per_sample=r.bits_per_sample, lossless=r.lossless,
@@ -2224,11 +2273,19 @@ def organize_duplicates():
     if hash_dirty:
         db.session.commit()
 
-    items_by_path = {r.path: _organize_row_item(r, out_dir) for r in rows}
+    dl_counts, dl_latest = _organize_downloads_index()
+    items_by_path = {}
+    for r in rows:
+        item = _organize_row_item(r, out_dir)
+        item["downloads"] = _organize_downloads_item(r.path, dl_counts, dl_latest)
+        items_by_path[r.path] = item
     data_groups = [
         {
             "group_type": g.group_type,
+            "platform": g.platform,
+            "song_id": g.song_id,
             "recommended": g.recommended,
+            "reason": g.reason,
             "items": [items_by_path[str(e.path)] for e in g.items],
         }
         for g in groups

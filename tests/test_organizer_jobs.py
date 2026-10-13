@@ -162,7 +162,8 @@ def test_run_job_scan_success(webapp_app, tmp_path, fake_audio_factory):
     assert summary["updated"] == 0
     assert summary["reused"] == 0
     assert summary["missing"] == 0
-    assert summary["groups"] == {"same_id": 0, "identical": 0}
+    assert summary["groups"] == {"same_id": 0, "same_id_candidate": 0,
+                                 "identical": 0}
     assert summary["duplicate_files"] == 0
     assert summary["duration_s"] >= 0
 
@@ -671,9 +672,13 @@ def test_api_duplicates(org_admin_client, tmp_path, fake_audio_factory):
     groups = resp.get_json()["data"]["groups"]
     assert len(groups) == 1
     g = groups[0]
-    assert g["group_type"] == "same_id"
+    # ORG-02：无下载历史命中、仅文件名解析 song_id → 候选组
+    assert g["group_type"] == "same_id_candidate"
+    assert g["platform"] is None
+    assert g["song_id"] == "12345"
     assert g["recommended"].endswith(".flac")
     assert len(g["items"]) == 2
     for item in g["items"]:
         assert "id" in item and "path" in item and "song_id" in item
+        assert "downloads" in item
         assert item["song_id"] == "12345"
