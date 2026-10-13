@@ -19,7 +19,7 @@ import re
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -133,7 +133,8 @@ def should_block_downgrade(existing_song, actual_level: str) -> tuple[bool, str]
     return False, ""
 
 
-def should_skip_upgrade(existing_song, actual_level: str) -> tuple[bool, str]:
+def should_skip_upgrade(existing_song, actual_level: str,
+                        quality_key=None) -> tuple[bool, str]:
     """音质升级任务（DownloadTask.kind=upgrade）判断本次取流是否值得下载。
 
     比 should_block_downgrade 更严：升级任务只为提升而来，同级重下只会
@@ -142,6 +143,8 @@ def should_skip_upgrade(existing_song, actual_level: str) -> tuple[bool, str]:
     - 已有 quality 或 actual_level 任一不在 QUALITY_ORDER → 跳过
       （无法确认是提升，保守不消耗额度）
     - actual_level 同级或低于已有 quality → 跳过
+    - 传入 quality_key（Provider.quality_key）且两档映射到同一平台请求值
+      （如 QQ hires/lossless 同为 flac）→ 跳过：名义更高、文件不变
     - 严格更高 → 放行
 
     纯函数，调用契约同 should_block_downgrade。
@@ -160,11 +163,77 @@ def should_skip_upgrade(existing_song, actual_level: str) -> tuple[bool, str]:
             f"无更高音质：已有档位 {old_level or '未知'} 与本次档位 "
             f"{actual_level or '未知'} 无法比较，未下载"
         )
-    if order.index(actual_level) >= order.index(old_level):
+    if order.index(actual_level) >= order.index(old_level) or (
+            quality_key is not None and quality_key(actual_level) == quality_key(old_level)):
         return True, (
             f"无更高音质：磁盘已有 {old_level}，本次最高只取到 {actual_level}，未下载"
         )
     return False, ""
+
+
+# ----------------------------------------------------------------------
+# 音质升级候选与入队（UPG-02/03）
+# ----------------------------------------------------------------------
+UPGRADE_COOLDOWN_DAYS = 7      # 升级被跳过（无更高音源）后的冷却期，期内不再列为候选
+UPGRADE_BATCH_LIMIT = 100      # 单次批量升级上限，防止一次性打满账号额度
+UPGRADE_SOURCE_NAME = "音质升级"  # 升级任务的来源名（下载历史「来源歌单」列）
+
+
+def upgrade_target_level(platform: str) -> str:
+    """平台当前音质设置（与 _process_task 同款回退：未单独设置时用旧全局 level）"""
+    return Setting.get(f"level_{platform}", "") or Setting.get("level", "exhigh")
+
+
+def find_upgrade_candidates(platform: str, song_ids=None, now: datetime | None = None):
+    """列出可升级歌曲，返回 (目标档位, [Song])，按下载时间新→旧排序。
+
+    候选 = success 记录且文件仍在磁盘、Song.quality（交付档位，与降级保护
+    同一口径）在 QUALITY_ORDER 内且低于目标档位，并排除：
+    - 与目标档位映射到同一平台请求值的档位（QQ hires/lossless 同为 flac）
+    - 有在途任务（pending/downloading/paused）
+    - 冷却期内升级任务被 skipped（该账号池拿不到更高音源）
+    目标档位在 QUALITY_ORDER 外（如 dolby）无法比较，返回空列表。
+    song_ids 非 None 时只在这些 ID 内筛选（入队前复核用）。
+    调用方须在 app context 内。
+    """
+    target = upgrade_target_level(platform)
+    order = MusicProvider.QUALITY_ORDER
+    if target not in order:
+        return target, []
+    quality_key = get_provider(platform).quality_key
+    target_key = quality_key(target)
+    lower = [lv for lv in order[order.index(target) + 1:] if quality_key(lv) != target_key]
+    if not lower:
+        return target, []
+
+    query = Song.query.filter(
+        Song.platform == platform,
+        Song.status == "success",
+        Song.quality.in_(lower),
+    )
+    if song_ids is not None:
+        ids = list({str(i) for i in song_ids})
+        if not ids:
+            return target, []
+        query = query.filter(Song.id.in_(ids))
+    songs = query.order_by(Song.downloaded_at.desc()).all()
+    if not songs:
+        return target, []
+
+    # 在途与冷却集合按平台整体查询（两者行数都很小），避免对全库 ID 做超长 IN
+    busy = {r[0] for r in db.session.query(DownloadTask.song_id).filter(
+        DownloadTask.platform == platform,
+        DownloadTask.status.in_(ACTIVE_TASK_STATUSES),
+    )}
+    since = (now or datetime.now()) - timedelta(days=UPGRADE_COOLDOWN_DAYS)
+    cooling = {r[0] for r in db.session.query(DownloadTask.song_id).filter(
+        DownloadTask.platform == platform,
+        DownloadTask.kind == "upgrade",
+        DownloadTask.status == "skipped",
+        DownloadTask.updated_at >= since,
+    )}
+    return target, [s for s in songs
+                    if s.id not in busy and s.id not in cooling and _song_file_exists(s)]
 
 
 def _month_start() -> datetime:
@@ -1171,6 +1240,44 @@ class TaskManager:
         logger.info("单首下载入队: %s - %s (id=%s)", artists, name, song_id)
         return True
 
+    def enqueue_upgrades(self, song_ids: list[str], platform: str = "netease") -> dict:
+        """批量提交音质升级任务（UPG-03）
+
+        入队前在锁内按候选规则逐首复核（文件在盘、档位仍低于设置、无在途
+        任务、不在冷却期），不满足的计入 skipped。任务 kind=upgrade：执行时
+        取到的档位须严格更高才下载（见 should_skip_upgrade）。fee 未知按 VIP
+        传（与下载页「重新下载」同一约定：VIP 账号能下免费歌，反之不行）。
+
+        Returns:
+            {"queued": 入队数, "skipped": 未入队数, "target_level": 目标档位}
+        """
+        platform = platform if platform in PLATFORMS else "netease"
+        requested = {str(i) for i in song_ids}
+        with self.app.app_context(), _enqueue_lock:
+            target, cands = find_upgrade_candidates(platform, song_ids=requested)
+            tasks = []
+            for s in cands:
+                task = DownloadTask(
+                    platform=platform,
+                    song_id=s.id,
+                    song_name=s.name,
+                    artists=s.artists,
+                    playlist_id=None,
+                    playlist_name=UPGRADE_SOURCE_NAME,
+                    status="pending",
+                    fee=1,
+                    kind="upgrade",
+                )
+                db.session.add(task)
+                tasks.append(task)
+            db.session.commit()
+            for task in tasks:
+                self._task_queue.put(task.pk)
+        logger.info("音质升级入队: 平台 %s 目标 %s，入队 %d 首，跳过 %d 首",
+                    platform, target, len(tasks), len(requested) - len(tasks))
+        return {"queued": len(tasks), "skipped": len(requested) - len(tasks),
+                "target_level": target}
+
     # ------------------------------------------------------------------
     # 重试
     # ------------------------------------------------------------------
@@ -1610,7 +1717,8 @@ class TaskManager:
                 DownloadTask.pk == task_pk).scalar()
             if kind == "upgrade":
                 # 升级任务（UPG-01）：本次档位须严格高于已有文件，同级重下只会白耗额度
-                block, why = should_skip_upgrade(existing_song, actual_level)
+                block, why = should_skip_upgrade(existing_song, actual_level,
+                                                 quality_key=getattr(client, "quality_key", None))
             else:
                 block, why = should_block_downgrade(existing_song, actual_level)
 

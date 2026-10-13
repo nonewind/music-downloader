@@ -199,6 +199,7 @@ class DownloadTask(db.Model):
             "playlist_id": self.playlist_id,
             "playlist_name": self.playlist_name,
             "status": self.status,
+            "kind": self.kind or "normal",
             "progress": self.progress,
             "error_msg": self.error_msg,
             "account_id": self.account_id,

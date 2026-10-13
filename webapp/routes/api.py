@@ -54,6 +54,11 @@ from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get
 from core.providers.base import MusicProvider
 from core.organizer import FileEntry, group_duplicates
 from organizer_manager import OrganizerBusyError
+from task_manager import (
+    UPGRADE_BATCH_LIMIT,
+    UPGRADE_COOLDOWN_DAYS,
+    find_upgrade_candidates,
+)
 from core.providers.netease.parse_links import parse_playlist_id
 from core.providers.kugou import bridge as kugou_bridge
 from core.providers.kugou.client import register_gcid
@@ -512,6 +517,7 @@ def _history_row(task, song) -> dict:
         "status": display_status,
         "error_msg": task.error_msg,
         "account_id": task.account_id,
+        "kind": task.kind or "normal",
     }
 
 
@@ -2004,6 +2010,98 @@ def discover_download_song():
         return jsonify({"code": 0, "msg": f"已加入下载队列: {name}"})
     # force 时 success 拦截已跳过，返回 False 只可能是活跃任务拦截
     return jsonify({"code": 1, "msg": "该歌曲正在下载中" if force else "该歌曲已下载或正在下载中"})
+
+
+# ======================================================================
+# 音质升级（UPG-02/03）
+# ======================================================================
+@api_bp.route("/upgrade/candidates")
+def upgrade_candidates():
+    """可升级歌曲清单（候选规则见 task_manager.find_upgrade_candidates）
+
+    query：platform、offset（默认 0）、limit（默认 200，上限 500）
+    响应 data：
+        target_level   当前平台音质设置（候选判定基准）
+        total / items  候选总数与本页条目；item.spec 为本地文件索引中的实际
+                       规格（未扫描入索引为 null，仅作参考，不参与判定）
+        recent         近 cooldown_days 天升级任务结果计数
+                       {done, skipped, failed, active}
+        cooldown_days / batch_limit  前端提示用常量
+    """
+    platform = _req_platform()
+    offset = _safe_int(request.args.get("offset"), 0, lo=0)
+    limit = _safe_int(request.args.get("limit"), 200, lo=1, hi=500)
+    target, cands = find_upgrade_candidates(platform)
+    page = cands[offset:offset + limit]
+
+    paths = [s.file_path for s in page if s.file_path]
+    specs = {}
+    if paths:
+        for f in LocalAudioFile.query.filter(LocalAudioFile.path.in_(paths),
+                                             LocalAudioFile.status == "active"):
+            specs[f.path] = {
+                "ext": f.ext,
+                "lossless": bool(f.lossless),
+                "bitrate_kbps": f.bitrate_kbps,
+                "sample_rate": f.sample_rate,
+                "bits_per_sample": f.bits_per_sample,
+            }
+    items = [{
+        "song_id": s.id,
+        "platform": s.platform,
+        "name": s.name,
+        "artists": s.artists,
+        "album": s.album,
+        "quality": s.quality,
+        "file_path": s.file_path,
+        "file_size": s.file_size,
+        "downloaded_at": s.downloaded_at.strftime("%Y-%m-%d %H:%M:%S") if s.downloaded_at else None,
+        "spec": specs.get(s.file_path),
+    } for s in page]
+
+    since = datetime.now() - timedelta(days=UPGRADE_COOLDOWN_DAYS)
+    rows = db.session.query(DownloadTask.status, func.count()).filter(
+        DownloadTask.platform == platform,
+        DownloadTask.kind == "upgrade",
+        DownloadTask.updated_at >= since,
+    ).group_by(DownloadTask.status).all()
+    recent = {"done": 0, "skipped": 0, "failed": 0, "active": 0}
+    for status, n in rows:
+        key = "active" if status in ACTIVE_TASK_STATUSES else status
+        if key in recent:
+            recent[key] += n
+
+    return jsonify({"code": 0, "data": {
+        "platform": platform,
+        "target_level": target,
+        "total": len(cands),
+        "items": items,
+        "recent": recent,
+        "cooldown_days": UPGRADE_COOLDOWN_DAYS,
+        "batch_limit": UPGRADE_BATCH_LIMIT,
+    }})
+
+
+@api_bp.route("/upgrade/enqueue", methods=["POST"])
+def upgrade_enqueue():
+    """批量提交音质升级任务
+
+    请求体：{"platform": "netease", "song_ids": ["123", ...]}
+    单次上限 UPGRADE_BATCH_LIMIT 首；入队前逐首复核候选规则，不满足的计入
+    skipped。账号额度、小时限额与账号调度沿用普通下载，不另开通道。
+    """
+    data = _json_body()
+    song_ids = data.get("song_ids")
+    if not isinstance(song_ids, list) or not song_ids:
+        return jsonify({"code": 1, "msg": "缺少 song_ids 列表"})
+    ids = [str(i).strip() for i in song_ids if str(i).strip()]
+    if len(set(ids)) > UPGRADE_BATCH_LIMIT:
+        return jsonify({"code": 1, "msg": f"单次最多升级 {UPGRADE_BATCH_LIMIT} 首"})
+    result = _get_task_manager().enqueue_upgrades(ids, platform=_req_platform())
+    msg = f"已加入 {result['queued']} 首升级任务"
+    if result["skipped"]:
+        msg += f"，{result['skipped']} 首已不满足升级条件"
+    return jsonify({"code": 0, "msg": msg, "data": result})
 
 
 # ======================================================================
