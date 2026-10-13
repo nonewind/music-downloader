@@ -182,6 +182,9 @@ class DownloadTask(db.Model):
     quality = db.Column(db.String(20), default="", nullable=False)
     file_path = db.Column(db.String(500), default="", nullable=False)
     file_size = db.Column(db.Integer, default=0, nullable=False)
+    # 任务类型：normal=普通下载（含 force 重下）；upgrade=音质升级，取到的档位
+    # 必须严格高于已有文件才下载（见 task_manager.should_skip_upgrade）
+    kind = db.Column(db.String(20), default="normal", nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -572,6 +575,7 @@ def _migrate_song_ids_to_text(engine) -> None:
                     quality VARCHAR(20) DEFAULT '' NOT NULL,
                     file_path VARCHAR(500) DEFAULT '' NOT NULL,
                     file_size INTEGER DEFAULT 0 NOT NULL,
+                    kind VARCHAR(20) DEFAULT 'normal' NOT NULL,
                     created_at DATETIME,
                     updated_at DATETIME,
                     PRIMARY KEY (pk)
@@ -581,10 +585,10 @@ def _migrate_song_ids_to_text(engine) -> None:
                 INSERT INTO download_tasks_new
                     (pk, platform, song_id, song_name, artists, playlist_id,
                      playlist_name, status, progress, error_msg, account_id, fee,
-                     quality, file_path, file_size, created_at, updated_at)
+                     quality, file_path, file_size, kind, created_at, updated_at)
                 SELECT pk, platform, CAST(song_id AS TEXT), song_name, artists,
                        playlist_id, playlist_name, status, progress, error_msg,
-                       account_id, fee, quality, file_path, file_size,
+                       account_id, fee, quality, file_path, file_size, kind,
                        created_at, updated_at
                 FROM download_tasks
             """))
@@ -703,6 +707,10 @@ def init_db(app, db_path: str = "downloads.db") -> None:
         if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "file_size"):
             with db.engine.begin() as conn:
                 conn.execute(text("ALTER TABLE download_tasks ADD COLUMN file_size INTEGER DEFAULT 0 NOT NULL"))
+        # 兼容迁移：给旧 download_tasks 表补充任务类型列（存量任务均为普通下载）
+        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "kind"):
+            with db.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN kind VARCHAR(20) DEFAULT 'normal' NOT NULL"))
         # 兼容迁移：songs.id / download_tasks.song_id Integer → VARCHAR(64)
         # （QQ songmid 字符串化，须在上述补列迁移之后执行）
         _migrate_song_ids_to_text(db.engine)

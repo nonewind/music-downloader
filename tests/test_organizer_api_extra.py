@@ -240,7 +240,7 @@ def test_init_db_migrates_legacy_db_and_creates_organizer_tables(tmp_path):
 
         # download_tasks：song_id 字符串化，快照三列补齐默认值
         task = db.session.execute(
-            text("SELECT song_id, status, quality, file_path, file_size "
+            text("SELECT song_id, status, quality, file_path, file_size, kind "
                  "FROM download_tasks")
         ).fetchone()
         assert task[0] == "123"
@@ -248,6 +248,8 @@ def test_init_db_migrates_legacy_db_and_creates_organizer_tables(tmp_path):
         assert task[2] == ""
         assert task[3] == ""
         assert task[4] == 0
+        # UPG-01：kind 补列，存量任务一律视为普通下载
+        assert task[5] == "normal"
 
         # users 旧行保留 + must_change_password 补列默认 0（存量账号不强制改密）
         user = db.session.execute(

@@ -133,6 +133,40 @@ def should_block_downgrade(existing_song, actual_level: str) -> tuple[bool, str]
     return False, ""
 
 
+def should_skip_upgrade(existing_song, actual_level: str) -> tuple[bool, str]:
+    """音质升级任务（DownloadTask.kind=upgrade）判断本次取流是否值得下载。
+
+    比 should_block_downgrade 更严：升级任务只为提升而来，同级重下只会
+    白耗额度、原样覆盖文件。规则（治理决策表）：
+    - 无已有 success 记录 / 已有记录文件已丢失 → 放行（等同普通补下）
+    - 已有 quality 或 actual_level 任一不在 QUALITY_ORDER → 跳过
+      （无法确认是提升，保守不消耗额度）
+    - actual_level 同级或低于已有 quality → 跳过
+    - 严格更高 → 放行
+
+    纯函数，调用契约同 should_block_downgrade。
+
+    Returns:
+        (是否跳过, 说明文案)；放行时文案为空串。
+    """
+    if existing_song is None:
+        return False, ""
+    if not _song_file_exists(existing_song):
+        return False, ""
+    order = MusicProvider.QUALITY_ORDER
+    old_level = existing_song.quality or ""
+    if old_level not in order or actual_level not in order:
+        return True, (
+            f"无更高音质：已有档位 {old_level or '未知'} 与本次档位 "
+            f"{actual_level or '未知'} 无法比较，未下载"
+        )
+    if order.index(actual_level) >= order.index(old_level):
+        return True, (
+            f"无更高音质：磁盘已有 {old_level}，本次最高只取到 {actual_level}，未下载"
+        )
+    return False, ""
+
+
 def _month_start() -> datetime:
     """本月 1 号 0 点（用于额度统计）"""
     now = datetime.now()
@@ -1572,11 +1606,37 @@ class TaskManager:
         with self.app.app_context():
             existing_song = Song.query.filter_by(
                 id=str(sid), platform=account.platform, status="success").first()
-            block, why = should_block_downgrade(existing_song, actual_level)
-            if block:
-                # 不下载、不写盘、不动 Song；任务终态 skipped（保护性跳过，
-                # 非失败，不走 _mark_failed）。skipped 不在 ACTIVE_TASK_STATUSES，
-                # 自动从活跃列表消失；历史 tab 经 _history_row 展示 why 文案
+            kind = db.session.query(DownloadTask.kind).filter(
+                DownloadTask.pk == task_pk).scalar()
+            if kind == "upgrade":
+                # 升级任务（UPG-01）：本次档位须严格高于已有文件，同级重下只会白耗额度
+                block, why = should_skip_upgrade(existing_song, actual_level)
+            else:
+                block, why = should_block_downgrade(existing_song, actual_level)
+
+        if block and kind == "upgrade":
+            # 当前账号拿不到更高档位：接力模式换下一个账号再取流（取流不计额度，
+            # 高权益账号可能拿得到）；轮询模式或已无可换账号才终态 skipped
+            if switch_on_fail:
+                next_acc = self._account_selector.switch_to_next(
+                    account.id, prefer_non_vip, fee,
+                    platform=account.platform or "netease", exclude=tried)
+                if next_acc and next_acc.id != account.id:
+                    logger.info("账号 %s 取不到更高音质(%s)，切换到 %s 重试",
+                                account.name, actual_level, next_acc.name)
+                    self._download_with_account(task_pk, next_acc, sid, sname, artists, pl_id, pl_name,
+                                                level, write_meta, write_lyric, switch_on_fail=True,
+                                                prefer_non_vip=prefer_non_vip, fee=fee, tried=tried,
+                                                quality_fallback=quality_fallback,
+                                                abort_check=abort_check)
+                    return
+            why = f"{why}（已尝试 {len(tried)} 个账号）"
+
+        if block:
+            # 不下载、不写盘、不动 Song；任务终态 skipped（保护性跳过，
+            # 非失败，不走 _mark_failed）。skipped 不在 ACTIVE_TASK_STATUSES，
+            # 自动从活跃列表消失；历史 tab 经 _history_row 展示 why 文案
+            with self.app.app_context():
                 cur = DownloadTask.query.get(task_pk)
                 if cur is not None and cur.status == "paused":
                     # 与 _mark_failed 同款守卫：暂停请求恰好落在判定与写库之间时
@@ -1587,11 +1647,9 @@ class TaskManager:
                     cur.progress = 100
                     cur.error_msg = why
                     db.session.commit()
-                logger.info(
-                    "音质降级保护: %s - %s 磁盘已有 %s 文件，拒绝以 %s 覆盖（任务 pk=%s → skipped）",
-                    artists, sname, existing_song.quality, actual_level, task_pk,
-                )
-                return
+            logger.info("%s - %s 保护性跳过（任务 pk=%s → skipped）：%s",
+                        artists, sname, task_pk, why)
+            return
 
         # 只有有 url 时才取扩展名和大小
         ext = url_info.get("ext", "mp3")
