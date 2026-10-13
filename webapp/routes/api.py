@@ -515,12 +515,47 @@ def _history_row(task, song) -> dict:
     }
 
 
+def _attach_file_states(data: list[dict]) -> None:
+    """为下载历史行附加 file_state（ORG-04 下载页文件状态徽章）
+
+    file_state 是索引派生数据，代表最近一次扫描时该路径的磁盘状态
+    （LocalAudioFile.status）：
+    - 仅 done 任务（响应 display_status=="success"）且 file_path 非空的行
+      参与查询：索引命中 → 对应状态（active/trashed/cleaned/missing），
+      未命中 → "unknown"（未入索引）；
+    - 其余行（在途/失败/跳过/无文件路径）file_state=None，前端不渲染徽章。
+
+    单条 IN 查询建 path→status 映射（去重后一次命中本页全部行）；只读索引
+    表，不改任何写路径，也不影响 /api/songs 既有分页与过滤逻辑。
+    """
+    for row in data:
+        row["file_state"] = None
+    paths: list[str] = []
+    seen: set[str] = set()
+    for row in data:
+        p = row.get("file_path")
+        if row.get("status") == "success" and p and p not in seen:
+            seen.add(p)
+            paths.append(p)
+    if not paths:
+        return
+    state_by_path = dict(
+        db.session.query(LocalAudioFile.path, LocalAudioFile.status)
+        .filter(LocalAudioFile.path.in_(paths))
+        .all()
+    )
+    for row in data:
+        if row.get("status") == "success" and row.get("file_path"):
+            row["file_state"] = state_by_path.get(row["file_path"], "unknown")
+
+
 @api_bp.route("/songs")
 def get_songs():
     """分页查询下载历史
 
     数据源改为 download_tasks 表（支持同一首歌在多个歌单多条记录）。
     通过 LEFT JOIN songs 表补充文件信息（file_path/file_size/quality）。
+    done 行额外附加 file_state（索引派生，见 _attach_file_states）。
 
     参数：
         page (默认 1)
@@ -568,6 +603,8 @@ def get_songs():
     data = []
     for task, song in pagination.items:
         data.append(_history_row(task, song))
+    # 下载页文件状态（ORG-04）：done 行附加索引派生的 file_state 徽章数据
+    _attach_file_states(data)
 
     return jsonify({
         "code": 0,

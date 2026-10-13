@@ -29,6 +29,7 @@
     .hist-tablewrap { overflow-x: auto; }
     .hist-songname { display: block; max-width: 260px; }
     .hist-album { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ui-text-3); }
+    .hist-filestate { display: inline-block; margin-top: 2px; font-size: 11px; }  /* 文件状态徽章：低于常规徽章一档，降噪音 */
     .hist-failbtn { font: inherit; border: 0; padding: 2px 10px; cursor: pointer; }
     .hist-meta { margin: 0 0 8px; font-size: 13px; }
     .hist-delwarn { margin: 0; padding: 10px 12px; font-size: 13px; color: #b45309; background: rgba(245, 158, 11, .12); border-radius: var(--ui-r-s); }
@@ -182,6 +183,11 @@
                                     <span class="hist-songname ui-truncate" x-text="s.name"
                                           :title="s.file_path || s.name"></span>
                                     <span class="hist-album" x-show="s.album" x-text="s.album" :title="s.album"></span>
+                                    {# 文件状态徽章（ORG-04）：索引派生的磁盘状态摘要，
+                                       file_state 为 null/未知值时不渲染（低视觉噪音） #}
+                                    <span class="ui-badge hist-filestate" x-show="fileStateMeta(s)"
+                                          :class="fileStateMeta(s) ? fileStateMeta(s).cls : ''"
+                                          x-text="fileStateMeta(s) ? fileStateMeta(s).text : ''"></span>
                                 </td>
                                 <td x-text="s.artists"></td>
                                 <td><span class="ui-text-3" style="font-size:12px" x-text="s.playlist_name || '--'"></span></td>

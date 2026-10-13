@@ -24,6 +24,17 @@ function historyPage() {
         paused:      { text: "已暂停", cls: "ui-badge-warning" },
     };
 
+    // 文件状态徽章映射（ORG-04）：file_state 由后端按本地音频文件索引派生，
+    // 代表最近一次扫描时该路径的磁盘状态；仅 done（success）行携带，
+    // null/缺字段 → fileStateMeta 返回 null（不渲染徽章，优雅降级）
+    const FILE_STATE_META = {
+        active:  { text: "文件在库", cls: "ui-badge-success" },
+        trashed: { text: "已回收站", cls: "ui-badge-warning" },
+        cleaned: { text: "已删除",   cls: "ui-badge-muted" },
+        missing: { text: "文件不在", cls: "ui-badge-danger" },
+        unknown: { text: "未入索引", cls: "ui-badge-muted" },
+    };
+
     return {
         // ---- 任务区状态 ----
         tasks: [],
@@ -68,6 +79,12 @@ function historyPage() {
         // ============================================================
         statusMeta(status) {
             return STATUS_META[status] || { text: status, cls: "ui-badge-muted" };
+        },
+
+        // done 行的文件状态徽章（file_state 缺失/非 success 行返回 null 不渲染）
+        fileStateMeta(s) {
+            if (!s || s.status !== "success" || !s.file_state) return null;
+            return FILE_STATE_META[s.file_state] || null;
         },
 
         // 任务操作防重：Set 存 "pk:action"，操作中的按钮 is-loading
