@@ -1,19 +1,17 @@
-"""音乐整理后端 MVP 测试：扫描 / 分组 / 规格比较 / 回收站清理 / Song 联动。
+"""音乐整理后端 MVP 测试：扫描 / 分组 / 规格比较。
 
 覆盖：
 1.  extract_song_id 文件名尾部 ID 提取
 2.  scan_directory 扫描（扩展名过滤、.trash 与隐藏目录剪枝、参数透传、读失败容错）
 3.  group_duplicates 分组（same_id 优先、identical 字节级、互斥与排序）
 4.  spec_rank 规格等级（hires > lossless > 320k > 128k）
-5.  POST /api/organize/clean 白名单（目录外路径拒删）
-6.  trash 模式（移入 .trash + Song repair 联动，quality 不动）
-7.  direct 模式（organize_direct_delete=true 直接 unlink）
-8.  trash 同名冲突（追加 _YYYYmmddHHMMSS 时间戳后缀）
-9.  POST /api/organize/scan 后台任务化契约（返回 job_id）、目录不存在分支、
+5.  POST /api/organize/scan 后台任务化契约（返回 job_id）、目录不存在分支、
     403 权限风格；分组结果改经 GET /api/organize/duplicates 读取
+
+（clean 端点/清理任务用例 ORG-03 起迁移至 tests/test_organizer_clean.py：
+后台任务契约 + 逐文件计划 + 白名单 + 回收站命名冲突）
 """
 
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -379,199 +377,7 @@ def _setup_out_dir(tmp_path):
 
 
 # ======================================================================
-# 5. clean 白名单：外部路径拒
-# ======================================================================
-def test_clean_rejects_path_outside_output_dir(admin_client, tmp_path):
-    out_dir = _setup_out_dir(tmp_path)
-    outside = tmp_path / "outside.mp3"
-    outside.write_bytes(b"x")
-
-    resp = admin_client.post("/api/organize/clean",
-                             json={"delete_paths": [str(outside)]})
-    body = resp.get_json()
-
-    assert resp.status_code == 200
-    assert body["code"] == 0
-    assert body["data"]["deleted"] == []
-    assert len(body["data"]["failed"]) == 1
-    assert body["data"]["failed"][0]["path"] == str(outside)
-    assert body["data"]["failed"][0]["reason"]
-    assert outside.exists()                 # 文件仍在
-
-
-def test_clean_requires_admin(member_client, tmp_path):
-    _setup_out_dir(tmp_path)
-    f = tmp_path / "dl" / "a.mp3"
-    f.write_bytes(b"x")
-
-    resp = member_client.post("/api/organize/clean",
-                              json={"delete_paths": [str(f)]})
-    assert resp.status_code == 403
-    assert f.exists()
-
-
-# ======================================================================
-# 6. trash 模式：移入 .trash + Song repair 联动（quality 不动）
-# ======================================================================
-def test_clean_trash_mode_moves_file_and_repairs_song(admin_client, tmp_path):
-    from models import Song, db
-    out_dir = _setup_out_dir(tmp_path)
-    keep = out_dir / "晴天-12345.flac"
-    keep.write_bytes(b"K" * 222)
-    dup = out_dir / "周杰伦" / "晴天-12345.mp3"
-    dup.parent.mkdir()
-    dup.write_bytes(b"D" * 111)
-
-    song = Song(id="12345", platform="netease", name="晴天", artists="周杰伦",
-                album="叶惠美", duration_ms=0, quality="lossless",
-                file_path=str(dup), file_size=111, playlist_id=None,
-                source_name="", status="success", account_id=None)
-    db.session.add(song)
-    db.session.commit()
-
-    resp = admin_client.post("/api/organize/clean", json={
-        "delete_paths": [str(dup)],
-        "repair": {str(dup): str(keep)},
-    })
-    body = resp.get_json()
-
-    assert resp.status_code == 200
-    assert body["code"] == 0
-    assert body["data"]["failed"] == []
-    assert [Path(p).name for p in body["data"]["deleted"]] == ["晴天-12345.mp3"]
-
-    # 原位置消失，文件出现在 .trash
-    assert not dup.exists()
-    trash_file = out_dir / ".trash" / "晴天-12345.mp3"
-    assert trash_file.exists()
-
-    # Song 联动：file_path 重指保留文件、file_size 更新、quality 不动
-    fresh = Song.query.filter_by(id="12345", platform="netease").first()
-    assert Path(fresh.file_path).resolve() == keep.resolve()
-    assert fresh.file_size == 222
-    assert fresh.quality == "lossless"
-
-    assert len(body["data"]["repaired"]) == 1
-    rep = body["data"]["repaired"][0]
-    assert rep["song"] == "netease/12345"
-    assert Path(rep["from"]).resolve() == dup.resolve()
-    assert Path(rep["to"]).resolve() == keep.resolve()
-
-
-def test_clean_repair_skipped_when_kept_file_missing(admin_client, tmp_path):
-    """保留文件不存在 → 不做 repair，Song 不动"""
-    from models import Song, db
-    out_dir = _setup_out_dir(tmp_path)
-    dup = out_dir / "a.mp3"
-    dup.write_bytes(b"D")
-
-    song = Song(id="1", platform="netease", name="a", quality="standard",
-                file_path=str(dup), file_size=1, status="success")
-    db.session.add(song)
-    db.session.commit()
-
-    resp = admin_client.post("/api/organize/clean", json={
-        "delete_paths": [str(dup)],
-        "repair": {str(dup): str(out_dir / "gone.flac")},
-    })
-    body = resp.get_json()
-
-    assert body["code"] == 0
-    assert body["data"]["repaired"] == []
-    assert not dup.exists()
-    fresh = Song.query.filter_by(id="1").first()
-    assert Path(fresh.file_path) == dup     # Song 未被改指
-
-
-def test_clean_keeps_song_pointing_at_surviving_file(admin_client, tmp_path):
-    """Song 指向的文件未被删（指向保留文件）→ Song 不动"""
-    from models import Song, db
-    out_dir = _setup_out_dir(tmp_path)
-    keep = out_dir / "keep.flac"
-    keep.write_bytes(b"K" * 10)
-    dup = out_dir / "dup.mp3"
-    dup.write_bytes(b"D" * 5)
-
-    song = Song(id="2", platform="netease", name="k", quality="lossless",
-                file_path=str(keep), file_size=10, status="success")
-    db.session.add(song)
-    db.session.commit()
-
-    resp = admin_client.post("/api/organize/clean", json={
-        "delete_paths": [str(dup)],
-        "repair": {str(dup): str(keep)},
-    })
-    body = resp.get_json()
-
-    assert body["code"] == 0
-    assert body["data"]["repaired"] == []
-    fresh = Song.query.filter_by(id="2").first()
-    assert Path(fresh.file_path).resolve() == keep.resolve()
-    assert fresh.file_size == 10
-
-
-# ======================================================================
-# 7. direct 模式：直接 unlink
-# ======================================================================
-def test_clean_direct_delete_mode_unlinks(admin_client, tmp_path):
-    from models import Setting
-    out_dir = _setup_out_dir(tmp_path)
-    Setting.set("organize_direct_delete", "true")
-    dup = out_dir / "a.mp3"
-    dup.write_bytes(b"D")
-
-    resp = admin_client.post("/api/organize/clean",
-                             json={"delete_paths": [str(dup)]})
-    body = resp.get_json()
-
-    assert body["code"] == 0
-    assert not dup.exists()
-    assert not (out_dir / ".trash").exists()    # 不产生回收站目录
-
-
-def test_clean_trash_inside_whitelist_rejected(admin_client, tmp_path):
-    """回收站里的文件视为已删除，不可再次清理"""
-    out_dir = _setup_out_dir(tmp_path)
-    trash_file = out_dir / ".trash" / "already.mp3"
-    trash_file.parent.mkdir()
-    trash_file.write_bytes(b"T")
-
-    resp = admin_client.post("/api/organize/clean",
-                             json={"delete_paths": [str(trash_file)]})
-    body = resp.get_json()
-
-    assert body["code"] == 0
-    assert body["data"]["deleted"] == []
-    assert len(body["data"]["failed"]) == 1
-    assert trash_file.exists()
-
-
-# ======================================================================
-# 8. trash 同名冲突：时间戳后缀
-# ======================================================================
-def test_clean_trash_name_conflict_gets_timestamp_suffix(admin_client, tmp_path):
-    out_dir = _setup_out_dir(tmp_path)
-    trash = out_dir / ".trash"
-    trash.mkdir()
-    (trash / "a.mp3").write_bytes(b"old")
-    dup = out_dir / "a.mp3"
-    dup.write_bytes(b"new")
-
-    resp = admin_client.post("/api/organize/clean",
-                             json={"delete_paths": [str(dup)]})
-    body = resp.get_json()
-
-    assert body["code"] == 0
-    assert not dup.exists()
-    # 原回收站同名文件不被覆盖
-    assert (trash / "a.mp3").read_bytes() == b"old"
-    moved = [p for p in trash.iterdir() if p.name != "a.mp3"]
-    assert len(moved) == 1
-    assert re.fullmatch(r"a_\d{14}\.mp3", moved[0].name)
-
-
-# ======================================================================
-# 9. scan 端点（ORG-01 后台任务化）：job_id 契约 / 目录不存在 / 权限
+# 5. scan 端点（ORG-01 后台任务化）：job_id 契约 / 目录不存在 / 权限
 # ======================================================================
 def test_scan_endpoint_returns_job_id_and_duplicates(admin_client, tmp_path):
     """POST scan 只入队返回 job_id；分组结果经 GET duplicates 读取"""

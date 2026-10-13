@@ -1,4 +1,4 @@
-"""整理任务调度器（ORG-01）
+"""整理任务调度器（ORG-01/02/03）
 
 职责：
 1. 音乐扫描（/api/organize/scan）后台任务化：单 worker 线程串行处理
@@ -9,6 +9,9 @@
    惰性缓存：命中不读盘，新算结果回写行
 4. 关联回填（ORG-02）：扫描内用 DownloadTask / Song 的 file_path 命中
    给索引行回填可信身份 (platform, song_id)（只读任务/Song 表）
+5. 文件清理后台任务化（ORG-03）：/api/organize/clean 提交逐文件计划
+   （OrganizerCleanItem），执行时逐条重验 + 落盘 + 即时 commit（中断安全），
+   删除成功后统一做 Song 关联修复（repair 重指 / 无保留则清空指针）
 
 线程安全说明（与 task_manager 同款约束）：
 - Flask 多线程下 SQLAlchemy session 需在子线程内创建/销毁
@@ -30,6 +33,7 @@ from models import (
     ORGANIZER_JOB_ACTIVE_STATUSES,
     DownloadTask,
     LocalAudioFile,
+    OrganizerCleanItem,
     OrganizerJob,
     Setting,
     Song,
@@ -150,11 +154,53 @@ class OrganizerManager:
             logger.info("整理扫描任务已提交: job_id=%s", job.id)
             return job
 
+    def submit_clean(self, delete_paths, repair=None) -> OrganizerJob:
+        """提交清理任务：逐路径落 OrganizerCleanItem 计划行并入队，立即返回 job 行
+
+        Args:
+            delete_paths: 待清理绝对路径列表（上限 1000 条，与旧同步端点一致）
+            repair: {"<被删路径>": "<保留路径>"}，可空；非 dict 一律按 {} 处理
+
+        Raises:
+            OrganizerBusyError: 已有在途整理任务（扫描/清理互斥，单 worker 串行）
+            ValueError: delete_paths 非字符串列表或为空
+        """
+        with self.app.app_context():
+            active = OrganizerJob.query.filter(
+                OrganizerJob.status.in_(ORGANIZER_JOB_ACTIVE_STATUSES)
+            ).first()
+            if active is not None:
+                raise OrganizerBusyError("已有整理任务正在执行")
+            if (not isinstance(delete_paths, list) or not delete_paths
+                    or any(not isinstance(p, str) for p in delete_paths)):
+                raise ValueError("缺少 delete_paths 列表")
+            if not isinstance(repair, dict):
+                repair = {}
+            job = OrganizerJob(job_type="clean", status="pending")
+            db.session.add(job)
+            db.session.flush()          # 先取 job.id 供计划行外联
+            for raw in delete_paths[:1000]:
+                db.session.add(OrganizerCleanItem(
+                    job_id=job.id,
+                    path=raw,
+                    keep_path=repair.get(raw),
+                    status="pending",
+                ))
+            db.session.commit()
+            db.session.refresh(job)     # 确保 id 等字段已加载
+            db.session.expunge(job)     # 脱离 session：context 出栈后仍可读已加载字段
+            self._queue.put(job.id)
+            logger.info("整理清理任务已提交: job_id=%s paths=%d", job.id,
+                        min(len(delete_paths), 1000))
+            return job
+
     def run_job(self, job_id: int) -> None:
         """同步执行单个任务：原子认领 → 执行 → 落终态。worker 循环与测试都调它
 
-        统一收尾：成功 → success + progress=100；异常 → failed +
-        error_msg（截断 2000）。两者都写 finished_at。
+        按 job_type 分派：scan → _execute_scan；clean → _execute_clean（其
+        终态可为 success/partial/failed，由执行函数按逐文件结果判定返回）。
+        统一收尾：progress=100 + finished_at；异常 → failed + error_msg
+        （截断 2000）。
         """
         if not self._claim(job_id):
             logger.info("整理任务 %s 认领失败（非 pending），跳过", job_id)
@@ -164,14 +210,17 @@ class OrganizerManager:
                 job = db.session.get(OrganizerJob, job_id)
                 if job is None:
                     return
-                if job.job_type != "scan":
+                if job.job_type == "scan":
+                    self._execute_scan(job)
+                    job.status = "success"
+                elif job.job_type == "clean":
+                    job.status = self._execute_clean(job)
+                else:
                     raise ValueError("任务类型暂不支持")
-                self._execute_scan(job)
-                job.status = "success"
                 job.progress = 100
                 job.finished_at = datetime.now()
                 db.session.commit()
-                logger.info("整理扫描完成 job_id=%s: %s", job_id, job.result)
+                logger.info("整理任务完成 job_id=%s: %s", job_id, job.result)
         except Exception as e:
             logger.exception("整理任务 %s 执行失败: %s", job_id, e)
             self._finish_failed(job_id, str(e))
@@ -416,3 +465,155 @@ class OrganizerManager:
         }
         job.result = json.dumps(summary, ensure_ascii=False)
         db.session.commit()
+
+    # ------------------------------------------------------------------
+    # 清理核心（ORG-03）
+    # ------------------------------------------------------------------
+    def _execute_clean(self, job) -> str:
+        """核心清理：逐文件重验 + 删除（回收站/直删）+ Song 关联修复
+
+        调用方（run_job）须已持有 app context 且已认领 job。返回终态字符串
+        （success / partial / failed）交由 run_job 落库；步骤级意外异常（如读
+        设置失败、下载目录消失）直接抛出交 run_job 统一 failed 落盘，已成功
+        items 保持 success 不回滚。
+
+        关键约束：
+        - 每个文件处理后立即 commit（中断安全：已成功项的落盘事实先落库，
+          重启恢复把 job 标 interrupted，pending/failed 计划不被改写）；
+        - 逐条执行前重验白名单（_organize_validate_path）：不存在/出下载
+          目录/位于 .trash 内的路径只记 failed，绝不删除；
+        - Song 关联修复只对删除成功的 item 做，且在全部文件处理完后统一
+          执行、一次性 commit；quality 刻意不动（交付档位语义，物理规格以
+          LocalAudioFile 为准，两者分离展示）；
+        - DownloadTask 零写入。
+        """
+        out_dir = self._resolve_output_dir()
+        if not out_dir.is_dir():
+            raise ValueError("下载目录不存在")
+        direct = Setting.get("organize_direct_delete", "false") == "true"
+
+        # 惰性导入（函数内）：routes.api 只在请求/执行期反向使用本模块的
+        # OrganizerBusyError 等符号，模块级互相 import 会成环；这层依赖是
+        # 刻意的——路径校验 / 回收站移动 / 路径比较保持 api 单一实现点。
+        # 经 sys.path 的顶层名 routes.api 导入（app.py 与测试同款），
+        # 避免 webapp.routes.api 再加载一份重复模块。
+        from routes.api import (
+            _move_to_trash,
+            _organize_validate_path,
+            _same_file_path,
+        )
+
+        items = OrganizerCleanItem.query.filter_by(job_id=job.id)\
+            .order_by(OrganizerCleanItem.id).all()
+        job.total = len(items)
+        db.session.commit()
+
+        deleted = trashed = n_failed = 0
+        first_error = None
+        for idx, item in enumerate(items, 1):
+            # 执行前重验：白名单（在下载目录内、不在 .trash、存在且是文件）
+            path, reason = _organize_validate_path(item.path, out_dir)
+            if path is None:
+                item.status = "failed"
+                item.error_msg = (reason or "")[:500]
+                item.finished_at = datetime.now()
+                first_error = first_error or reason
+                n_failed += 1
+            else:
+                trash_dest = None
+                try:
+                    if direct:
+                        path.unlink()
+                    else:
+                        trash_dest = _move_to_trash(path, out_dir)
+                except OSError as e:
+                    item.status = "failed"
+                    item.error_msg = str(e)[:400]
+                    item.finished_at = datetime.now()
+                    first_error = first_error or str(e)
+                    n_failed += 1
+                else:
+                    item.status = "success"
+                    item.trash_dest = str(trash_dest) if trash_dest else None
+                    item.finished_at = datetime.now()
+                    if trash_dest:
+                        trashed += 1
+                    else:
+                        deleted += 1
+                    # 索引行联动（无行不报错：未扫描过的文件也能清）。
+                    # 以校验后的 resolve 路径匹配（walk 产物即 resolve 路径），
+                    # 兜底再按原始提交路径找一次。
+                    row = LocalAudioFile.query.filter_by(path=str(path)).first()
+                    if row is None and str(path) != item.path:
+                        row = LocalAudioFile.query.filter_by(path=item.path).first()
+                    if row is not None:
+                        row.status = "trashed" if trash_dest else "cleaned"
+            # 进度随本 item 的结果一并立即 commit（中断安全）
+            job.processed = idx
+            job.progress = idx * 100 // job.total if job.total else 100
+            db.session.commit()
+
+        # Song 关联修复：只对删除成功的 item 做，全部处理完后统一执行
+        repaired: list[dict] = []
+        cleared: list[dict] = []
+        for item in items:
+            if item.status != "success":
+                continue
+            keep_raw = (item.keep_path or "").strip()
+            keep_path = None
+            if keep_raw:
+                keep_path, keep_reason = _organize_validate_path(keep_raw, out_dir)
+                if keep_path is None:
+                    logger.warning("整理 repair 保留文件复检未通过，改按无保留处理: "
+                                   "%s (%s)", keep_raw, keep_reason)
+            # 全表 file_path 比对（历史行量小，可接受），_same_file_path 归一
+            songs = [s for s in Song.query.filter(Song.file_path != "").all()
+                     if _same_file_path(s.file_path, item.path)]
+            if keep_path is not None:
+                try:
+                    keep_size = keep_path.stat().st_size
+                except OSError as e:
+                    logger.warning("整理 repair 读取保留文件大小失败，file_size 置 0: "
+                                   "%s (%s)", keep_path, e)
+                    keep_size = 0
+                for song in songs:
+                    song.file_path = str(keep_path)
+                    song.file_size = keep_size
+                    # quality 刻意不动：交付档位语义（用户当初选的交付规格），
+                    # 物理规格以 LocalAudioFile 行为准，两者分离展示
+                    repaired.append({
+                        "song": f"{song.platform}/{song.id}",
+                        "from": item.path,
+                        "to": str(keep_path),
+                    })
+                    logger.info("整理 repair: Song(%s/%s) %s -> %s",
+                                song.platform, song.id, item.path, keep_path)
+            else:
+                # 无可保留文件：清空指针表达"文件不可用"。后续下载的已存在
+                # 判定走磁盘检查（_song_file_exists 语义），不受空指针影响
+                for song in songs:
+                    song.file_path = ""
+                    song.file_size = 0
+                    cleared.append({
+                        "song": f"{song.platform}/{song.id}",
+                        "path": item.path,
+                    })
+        db.session.commit()
+
+        result = {
+            "total": len(items),
+            "deleted": deleted,
+            "trashed": trashed,
+            "failed": n_failed,
+            "repaired": repaired,
+            "cleared": cleared,
+            "songs_repaired": len(repaired),
+            "songs_cleared": len(cleared),
+        }
+        job.result = json.dumps(result, ensure_ascii=False)
+        if n_failed == 0:
+            return "success"
+        if deleted + trashed == 0:
+            job.error_msg = (first_error or "清理全部失败")[:2000]
+            return "failed"
+        return "partial"

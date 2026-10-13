@@ -280,6 +280,28 @@ class OrganizerJob(db.Model):
 ORGANIZER_JOB_ACTIVE_STATUSES = ("pending", "running")
 
 
+class OrganizerCleanItem(db.Model):
+    """一次清理任务的逐文件计划与结果（回收站落点可追溯）
+
+    path: 待清理的原始绝对路径（提交时的计划，与 LocalAudioFile.path 同为
+        绝对路径，但未强制 resolve 归一）
+    keep_path: repair 保留路径，可空（无 repair 意图即为 NULL）
+    status: pending | success | failed（逐文件执行前重验 + 执行结果）
+    trash_dest: 实际落入 .trash 的路径，直删（organize_direct_delete）为 NULL
+    finished_at: 该文件处理完成时刻（成功/失败均写，中断安全：每文件处理后
+        立即 commit，已成功项的落盘事实先落库）
+    """
+    __tablename__ = "organizer_clean_items"
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    job_id = db.Column(db.Integer, nullable=False, index=True)
+    path = db.Column(db.String(500), nullable=False)          # 待清理的原始绝对路径
+    keep_path = db.Column(db.String(500), nullable=True)      # repair 保留路径，可空
+    status = db.Column(db.String(20), nullable=False, default="pending")  # pending|success|failed
+    error_msg = db.Column(db.String(500), nullable=True)
+    trash_dest = db.Column(db.String(500), nullable=True)     # 实际落入 .trash 的路径，直删为 NULL
+    finished_at = db.Column(db.DateTime, nullable=True)
+
+
 class LocalAudioFile(db.Model):
     """本地音频文件索引：代表最近一次成功扫描时的磁盘状态，不是歌曲身份
 

@@ -50,7 +50,7 @@ from flask import Blueprint, current_app, jsonify, request, Response, session
 from sqlalchemy import func
 
 from auth import current_user
-from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, LocalAudioFile
+from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
 from core.providers.base import MusicProvider
 from core.organizer import FileEntry, group_duplicates
 from organizer_manager import OrganizerBusyError
@@ -2044,7 +2044,11 @@ def _move_to_trash(path: Path, out_dir: Path) -> Path:
 # ----------------------------------------------------------------------
 # ORG-01：scan 由同步执行改为后台任务（OrganizerManager 单 worker 串行），
 # 本端点只入队并立即返回 job_id；进度经 /organize/jobs/<id> 轮询，
-# 结果经 /organize/duplicates 读取。clean 不受影响。
+# 结果经 /organize/duplicates 读取。
+# ORG-03：clean 同步清理实现移入 OrganizerManager（逐文件计划落
+# organizer_clean_items，执行重验 + 回收站/直删 + Song 关联修复），本端点
+# 同样只入队返回 job_id。_organize_validate_path / _move_to_trash 保留在
+# 本文件（单一实现点，manager 执行期惰性导入）。
 # ======================================================================
 _ORGANIZE_FILE_STATUSES = ("active", "missing", "trashed", "cleaned")
 
@@ -2123,19 +2127,38 @@ def organize_scan():
 
 @api_bp.route("/organize/jobs/<int:job_id>")
 def organize_job_detail(job_id: int):
-    """查询整理任务详情（进度 / result JSON 摘要，仅管理员）"""
+    """查询整理任务详情（进度 / result JSON 摘要，仅管理员）
+
+    clean 任务额外内联 items（逐文件计划与结果，≤1000 条）：
+    [{path, keep_path, status, error_msg, trash_dest, finished_at}]
+    """
     err = _require_admin()
     if err:
         return err
     job = OrganizerJob.query.get(job_id)
     if job is None:
         return jsonify({"code": 1, "msg": "任务不存在"})
-    return jsonify({"code": 0, "data": {"job": _organize_job_dict(job)}})
+    job_data = _organize_job_dict(job)
+    if job.job_type == "clean":
+        items = OrganizerCleanItem.query.filter_by(job_id=job.id)\
+            .order_by(OrganizerCleanItem.id).all()
+        job_data["items"] = [
+            {
+                "path": i.path,
+                "keep_path": i.keep_path,
+                "status": i.status,
+                "error_msg": i.error_msg,
+                "trash_dest": i.trash_dest,
+                "finished_at": i.finished_at.strftime("%Y-%m-%d %H:%M:%S") if i.finished_at else None,
+            }
+            for i in items
+        ]
+    return jsonify({"code": 0, "data": {"job": job_data}})
 
 
 @api_bp.route("/organize/state")
 def organize_state():
-    """整理总览：活跃任务 / 最近一次扫描（任意终态）/ 索引统计（仅管理员）"""
+    """整理总览：活跃任务 / 最近一次扫描与清理（任意终态）/ 索引统计（仅管理员）"""
     err = _require_admin()
     if err:
         return err
@@ -2146,11 +2169,16 @@ def organize_state():
         OrganizerJob.job_type == "scan",
         OrganizerJob.status.notin_(ORGANIZER_JOB_ACTIVE_STATUSES),
     ).order_by(OrganizerJob.id.desc()).first()
+    last_clean = OrganizerJob.query.filter(
+        OrganizerJob.job_type == "clean",
+        OrganizerJob.status.notin_(ORGANIZER_JOB_ACTIVE_STATUSES),
+    ).order_by(OrganizerJob.id.desc()).first()
     return jsonify({
         "code": 0,
         "data": {
             "active_job": _organize_job_dict(active) if active else None,
             "last_scan": _organize_job_dict(last_scan) if last_scan else None,
+            "last_clean": _organize_job_dict(last_clean) if last_clean else None,
             "index": {
                 "total": LocalAudioFile.query.count(),
                 "active": LocalAudioFile.query.filter_by(status="active").count(),
@@ -2295,91 +2323,25 @@ def organize_duplicates():
 
 @api_bp.route("/organize/clean", methods=["POST"])
 def organize_clean():
-    """清理选中的重复音乐文件（仅管理员）
+    """清理选中的重复音乐文件（仅管理员，ORG-03 后台任务化）
 
     请求体：{"delete_paths": [...], "repair": {"<被删路径>": "<保留路径>"}}
-    删除模式由设置 organize_direct_delete 控制（默认 false=移入 .trash 回收站；
-    true=直接删除）。逐条白名单校验：必须在下载目录内、不在 .trash 内、存在；
-    校验失败的路径记入 failed 并继续处理其余。
-
-    repair：删除成功且保留文件校验通过（同白名单）时，把 file_path 指向被删
-    文件的 Song 记录重指到保留文件并更新 file_size；quality 语义是交付档位，
-    刻意不动。
-
-    响应 data：{"deleted": [...], "failed": [{path, reason}],
-                "repaired": [{song: "platform/id", from, to}]}
+    只入队立即返回 job_id；逐文件重验、回收站/直删（设置 organize_direct_delete）
+    与 Song 关联修复由 OrganizerManager._execute_clean 执行，逐文件结果经
+    /organize/jobs/<id> 的 items 读取，repair/clear 摘要在 job.result。
     """
     err = _require_admin()
     if err:
         return err
-    out_dir = _resolve_output_dir()
-    if not out_dir.is_dir():
-        return jsonify({"code": 1, "msg": "下载目录不存在"})
-
+    manager = current_app.config.get("ORGANIZER_MANAGER")
+    if manager is None:
+        return jsonify({"code": 1, "msg": "整理服务未初始化"})
     data = _json_body()
-    delete_paths = data.get("delete_paths")
-    if not isinstance(delete_paths, list) or not delete_paths:
-        return jsonify({"code": 1, "msg": "缺少 delete_paths 列表"})
-    repair = data.get("repair")
-    if not isinstance(repair, dict):
-        repair = {}
-    direct = Setting.get("organize_direct_delete", "false") == "true"
-
-    deleted: list[str] = []
-    failed: list[dict] = []
-    repaired: list[dict] = []
-    for raw in delete_paths[:1000]:
-        if not isinstance(raw, str):
-            failed.append({"path": str(raw), "reason": "路径必须是字符串"})
-            continue
-        path, reason = _organize_validate_path(raw, out_dir)
-        if path is None:
-            failed.append({"path": raw, "reason": reason})
-            continue
-        try:
-            if direct:
-                path.unlink()
-            else:
-                _move_to_trash(path, out_dir)
-        except OSError as e:
-            logger.warning("整理清理文件失败: %s (%s)", path, e)
-            failed.append({"path": raw, "reason": str(e)})
-            continue
-        deleted.append(str(path))
-
-        # Song 联动（repair）：全表 file_path 比对（历史行量小，可接受）
-        keep_raw = repair.get(raw)
-        if not (isinstance(keep_raw, str) and keep_raw.strip()):
-            continue
-        keep_path, keep_reason = _organize_validate_path(keep_raw, out_dir)
-        if keep_path is None:
-            logger.warning("整理 repair 保留文件校验未通过，跳过修复: %s (%s)",
-                           keep_raw, keep_reason)
-            continue
-        try:
-            keep_size = keep_path.stat().st_size
-        except OSError as e:
-            logger.warning("整理 repair 读取保留文件大小失败，file_size 置 0: %s (%s)",
-                           keep_path, e)
-            keep_size = 0
-        for song in Song.query.filter(Song.file_path != "").all():
-            if not _same_file_path(song.file_path, str(path)):
-                continue
-            song.file_path = str(keep_path)
-            song.file_size = keep_size
-            repaired.append({
-                "song": f"{song.platform}/{song.id}",
-                "from": str(path),
-                "to": str(keep_path),
-            })
-            logger.info("整理 repair: Song(%s/%s) %s -> %s",
-                        song.platform, song.id, path, keep_path)
-    db.session.commit()
-
-    logger.info("音乐整理清理(%s): 删除 %d / 失败 %d / 修复 %d",
-                "直接删除" if direct else "移入回收站",
-                len(deleted), len(failed), len(repaired))
-    return jsonify({
-        "code": 0,
-        "data": {"deleted": deleted, "failed": failed, "repaired": repaired},
-    })
+    try:
+        job = manager.submit_clean(
+            data.get("delete_paths"), data.get("repair"))
+    except OrganizerBusyError as e:
+        return jsonify({"code": 1, "msg": str(e)})
+    except ValueError as e:
+        return jsonify({"code": 1, "msg": str(e)})
+    return jsonify({"code": 0, "data": {"job_id": job.id, "status": job.status}})
