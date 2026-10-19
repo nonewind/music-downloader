@@ -8,6 +8,7 @@
 import argparse
 import atexit
 import logging
+import logging.handlers
 import os
 import shutil
 import sys
@@ -37,7 +38,9 @@ _log_dir = (Path(os.environ["APP_DATA_DIR"]).expanduser().resolve() / "logs"
             else _ROOT / "logs")
 try:
     _log_dir.mkdir(parents=True, exist_ok=True)
-    _log_handlers.append(logging.FileHandler(str(_log_dir / "webapp.log"), encoding="utf-8"))
+    # 单文件满 5MB 自动换新，保留最近 3 份（webapp.log.1~.3），防长期运行无限膨胀
+    _log_handlers.append(logging.handlers.RotatingFileHandler(
+        str(_log_dir / "webapp.log"), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"))
 except OSError as _e:
     print(f"[webapp] 日志文件初始化失败，仅输出到控制台: {_e}", file=sys.stderr)
 logging.basicConfig(
