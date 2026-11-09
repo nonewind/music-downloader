@@ -478,6 +478,24 @@ def get_api_base_url(platform: str) -> str:
     return get_custom_api_url()
 
 
+# 旧库补列迁移表：(表, 列, 列定义)。存量行补默认值，读取侧空值按各字段
+# 语义回退（如 download_tasks 音质快照为空时回退 JOIN 的 Song，不回填不编造）
+_ADDED_COLUMNS = (
+    ("songs", "account_id", "INTEGER"),
+    ("download_tasks", "account_id", "INTEGER"),
+    ("accounts", "platform", "VARCHAR(20) DEFAULT 'netease' NOT NULL"),
+    ("songs", "platform", "VARCHAR(20) DEFAULT 'netease' NOT NULL"),
+    ("download_tasks", "platform", "VARCHAR(20) DEFAULT 'netease' NOT NULL"),
+    ("playlists", "platform", "VARCHAR(20) DEFAULT 'netease' NOT NULL"),
+    # 下载时刻音质/文件快照三列
+    ("download_tasks", "quality", "VARCHAR(20) DEFAULT '' NOT NULL"),
+    ("download_tasks", "file_path", "VARCHAR(500) DEFAULT '' NOT NULL"),
+    ("download_tasks", "file_size", "INTEGER DEFAULT 0 NOT NULL"),
+    # 任务类型（存量任务均为普通下载）
+    ("download_tasks", "kind", "VARCHAR(20) DEFAULT 'normal' NOT NULL"),
+)
+
+
 def _column_exists(inspector, table: str, column: str) -> bool:
     """检查某列是否已存在（用于 ALTER TABLE 迁移）"""
     return column in {c["name"] for c in inspector.get_columns(table)}
@@ -659,62 +677,24 @@ def init_db(app, db_path: str = "downloads.db") -> None:
 
     with app.app_context():
         db.create_all()
-        # 兼容迁移：给旧表补充 account_id 列
+        # 兼容迁移：给旧表补列（顺序即历史版本的补列顺序；表重建迁移
+        # _migrate_song_ids_to_text 依赖这些列已存在，必须先执行）
         inspector = inspect(db.engine)
-        if inspector.has_table("songs") and not _column_exists(inspector, "songs", "account_id"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE songs ADD COLUMN account_id INTEGER"))
-        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "account_id"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN account_id INTEGER"))
-        # 兼容迁移：给旧 accounts 表补充 platform 列（默认 netease）
-        if inspector.has_table("accounts") and not _column_exists(inspector, "accounts", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE accounts ADD COLUMN platform VARCHAR(20) DEFAULT 'netease' NOT NULL"))
-        # 兼容迁移：给旧 songs 表补充 platform 列
-        if inspector.has_table("songs") and not _column_exists(inspector, "songs", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE songs ADD COLUMN platform VARCHAR(20) DEFAULT 'netease' NOT NULL"))
-        # 兼容迁移：给旧 download_tasks 表补充 platform 列
-        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN platform VARCHAR(20) DEFAULT 'netease' NOT NULL"))
-        # 兼容迁移：给旧 playlists 表补充 platform 列
-        if inspector.has_table("playlists") and not _column_exists(inspector, "playlists", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE playlists ADD COLUMN platform VARCHAR(20) DEFAULT 'netease' NOT NULL"))
-        # 兼容迁移：给旧 download_tasks 表补充下载时刻音质/文件快照三列
-        # （存量行补默认空值，读取侧空值回退 JOIN 的 Song，不回填不编造）
-        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "quality"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN quality VARCHAR(20) DEFAULT '' NOT NULL"))
-        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "file_path"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN file_path VARCHAR(500) DEFAULT '' NOT NULL"))
-        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "file_size"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN file_size INTEGER DEFAULT 0 NOT NULL"))
-        # 兼容迁移：给旧 download_tasks 表补充任务类型列（存量任务均为普通下载）
-        if inspector.has_table("download_tasks") and not _column_exists(inspector, "download_tasks", "kind"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE download_tasks ADD COLUMN kind VARCHAR(20) DEFAULT 'normal' NOT NULL"))
+        for table, column, ddl in _ADDED_COLUMNS:
+            if inspector.has_table(table) and not _column_exists(inspector, table, column):
+                with db.engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
         # 兼容迁移：songs.id / download_tasks.song_id Integer → VARCHAR(64)
         # （QQ songmid 字符串化，须在上述补列迁移之后执行）
         _migrate_song_ids_to_text(db.engine)
-        # 更新历史数据：确保所有记录都有正确的平台标记
-        if inspector.has_table("songs") and _column_exists(inspector, "songs", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("UPDATE songs SET platform = 'netease' WHERE platform IS NULL OR platform = ''"))
-        if inspector.has_table("download_tasks") and _column_exists(inspector, "download_tasks", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("UPDATE download_tasks SET platform = 'netease' WHERE platform IS NULL OR platform = ''"))
-        if inspector.has_table("playlists") and _column_exists(inspector, "playlists", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("UPDATE playlists SET platform = 'netease' WHERE platform IS NULL OR platform = ''"))
-        # accounts 与其余三表对齐：残留 NULL/空 platform 归一到 netease
-        if inspector.has_table("accounts") and _column_exists(inspector, "accounts", "platform"):
-            with db.engine.begin() as conn:
-                conn.execute(text("UPDATE accounts SET platform = 'netease' WHERE platform IS NULL OR platform = ''"))
+        # 更新历史数据：确保所有记录都有正确的平台标记（残留 NULL/空 platform 归一到 netease）
+        # 重新 inspect：Inspector 缓存列信息，补列/表重建后旧实例看不到新结构
+        inspector = inspect(db.engine)
+        for table in ("songs", "download_tasks", "playlists", "accounts"):
+            if inspector.has_table(table) and _column_exists(inspector, table, "platform"):
+                with db.engine.begin() as conn:
+                    conn.execute(text(
+                        f"UPDATE {table} SET platform = 'netease' WHERE platform IS NULL OR platform = ''"))
         # 写入缺失的默认配置
         for key, value in DEFAULT_SETTINGS.items():
             if not db.session.get(Setting, key):

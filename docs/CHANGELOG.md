@@ -2,6 +2,28 @@
 
 本文件记录各版本变更内容（最新版本在最前）。
 
+## 未发布（代码审计与重构）
+
+### 修复
+
+- **重新下载漏计账号额度**：已有成功记录的歌曲被强制重下 / 音质升级时，歌曲记录合并更新不会刷新 `downloaded_at`，按该字段统计的月额度与每小时限额都漏计本次下载。成功入库（含声音内容去重命中）现显式写入下载时间。
+- **下载失败日志误判**：`requests` 网络异常与文件大小校验失败都是 `OSError` 子类，原异常分支顺序把它们当作本地文件错误以 ERROR + `[Errno 0]` 记录；调整顺序后网络/校验类失败按 WARNING 记录，真正的本地 IO 错误仍为 ERROR。
+- **设置接口布尔值**：`PUT /api/settings` 收到 JSON `true/false` 时原样 `str()` 存成 `"True"/"False"`，读取侧按 `== "true"` 判定会把开关视为关闭；现统一归一为 `"true"/"false"`（前端本就提交字符串，不受影响）。
+- **中止登记读写加锁**：`_consume_abort` 弹出中止原因时改为持 `_control_lock`，与其余登记/清理路径一致。
+- **旧库迁移的列信息缓存**：补列与表重建后重新 inspect 再做 platform 归一化（SQLAlchemy Inspector 会缓存列信息）。
+
+### 重构（行为不变）
+
+- 新增 `webapp/paths.py`，统一程序根目录与下载目录解析（原先 app / task_manager / organizer_manager / migrate_layout / routes.api 各写一份）。
+- `task_manager`：搜索下载与专辑下载合并为 `_enqueue_tracks`；四处「锁内查重 → 插入 → 入队」收敛为 `_enqueue_new_task` / `_active_task_exists`；接力换号的三处递归收敛为 `try_next_account`；定时同步复用 `sync_all`；活跃任务列表的账号名改为一次查询（原逐任务查询）。
+- `routes/api`：三平台内置 API 服务的 status/start/stop 与扫码登录路由改为表驱动注册（URL 与响应不变）；QQ/酷狗账号刷新与三平台账号测试合并；账号列表/统计的本月下载数改为一次 GROUP BY（原逐账号查询）；搜索结果与 `song-flags` 共用 `_song_flags`。
+- `models`：旧库补列迁移改为表驱动。
+- 全部 `Model.query.get()`（SQLAlchemy 2.x 已标记 legacy）替换为 `db.session.get()`，测试运行不再有弃用告警；清理未使用的导入/变量。
+
+### 测试
+
+- 新增 19 项：内置服务控制/扫码登录/账号测试/账号统计路由的行为基线 17、设置布尔归一 1、重下刷新下载时间 1；全量 207 项通过。
+
 ## 0.9.0.0（2026-11-09）
 
 ### 新增

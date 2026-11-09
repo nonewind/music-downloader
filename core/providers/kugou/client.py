@@ -471,7 +471,7 @@ class KuGouClient:
             p = dict(params or {})
             try:
                 p["cookie"] = self._build_cookie()
-            except RuntimeError as e:
+            except RuntimeError:
                 # dfid 注册失败（服务未就绪等）：重试或抛出
                 if attempt < retries:
                     time.sleep(1.5 * attempt)

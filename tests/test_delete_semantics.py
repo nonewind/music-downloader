@@ -8,7 +8,6 @@ v0.7.7.1 起每条任务行带当次实际档位快照（quality/file_path/file_
 剩余最新 done 行的非空快照）。delete_file=False 行为完全不变。
 """
 
-import pytest
 
 import routes.api as api_module
 from models import DownloadTask, Setting, Song, db

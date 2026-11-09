@@ -7,7 +7,7 @@
 import logging
 
 from ..base import MusicProvider
-from .client import NeteaseClient, OFFICIAL_TOPLISTS
+from .client import NeteaseClient
 from ._transform import (
     transform_song_urls,
     transform_song_detail,

@@ -213,7 +213,7 @@ def _read_web_bind() -> tuple:
             return ("0.0.0.0", 45600)
 
     host, _, port_str = raw.rpartition(":")
-    if host == "" or host == "*":
+    if host in ("", "*"):
         host = "0.0.0.0"
     try:
         return (host, int(port_str))

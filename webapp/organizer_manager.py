@@ -22,7 +22,6 @@
 import json
 import logging
 import queue
-import sys
 import threading
 import time
 from datetime import datetime
@@ -39,15 +38,10 @@ from models import (
     Song,
     db,
 )
+from paths import current_output_dir
 
 logger = logging.getLogger(__name__)
 
-# 项目根目录，用于解析相对路径的 output_dir；frozen: PyInstaller 打包后
-# 用 exe 同级目录作为根目录（与 task_manager._ROOT 保持同一规则）
-if getattr(sys, "frozen", False):
-    _ROOT = Path(sys.executable).resolve().parent
-else:
-    _ROOT = Path(__file__).resolve().parent.parent
 
 
 def _norm_lookup_path(raw: str) -> str | None:
@@ -318,16 +312,8 @@ class OrganizerManager:
                 row.platform, row.song_id = hit
 
     def _resolve_output_dir(self) -> Path:
-        """解析下载输出目录。规则与 routes/api._resolve_output_dir 保持一致
-        （Setting 相对路径基于项目根；frozen 包基于 exe 同级目录）。刻意不复用
-        api 模块（避免反向依赖 web 层），规则变更须两处同步。
-        调用方须已在 app context 内（读 Setting）。
-        """
-        output_dir = Setting.get("output_dir", "downloads")
-        p = Path(output_dir)
-        if not p.is_absolute():
-            p = _ROOT / output_dir
-        return p.resolve()
+        """解析下载输出目录（规则见 paths.output_dir_path）；调用方须在 app context 内"""
+        return current_output_dir()
 
     def _execute_scan(self, job) -> None:
         """核心扫描：增量同步 LocalAudioFile 索引 + 重复分组，写 result 摘要
