@@ -1,10 +1,11 @@
 """页面路由 - 渲染 HTML 模板
 
 单用户自用工具，无登录体系（v0.9.0.0 移除）：所有页面对本机/内网
-访问者直接开放，访问控制依赖部署环境（fnOS 面板/内网边界）。
+访问者直接开放，访问控制依赖部署环境（fnOS 面板/内网边界），可选访问令牌
+与敏感操作限制见 webapp/access.py。
 """
 
-from flask import Blueprint, render_template
+from flask import Blueprint, jsonify, render_template
 
 from models import PLATFORM_NAMES
 
@@ -71,3 +72,9 @@ def settings():
 def organize():
     """音乐整理页"""
     return render_template("organize.html", active_page="organize")
+
+
+@views_bp.route("/healthz")
+def healthz():
+    """健康检查（Docker HEALTHCHECK 用；免访问令牌，不含任何数据）"""
+    return jsonify({"status": "ok"})
