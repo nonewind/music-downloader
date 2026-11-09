@@ -128,8 +128,21 @@
                         <div class="set-body">
                             <div class="set-field">
                                 <label class="set-label">Web 服务监听地址</label>
-                                <input type="text" class="ui-input set-input" x-model="form.web_port" placeholder="*:45600">
-                                <div class="set-hint">格式: host:port，如 *:45600 或 127.0.0.1:45600；* 表示监听所有网卡；修改后需重启服务生效</div>
+                                <input type="text" class="ui-input set-input" x-model="form.web_port" placeholder="127.0.0.1:45600">
+                                <div class="set-hint">格式: host:port，如 127.0.0.1:45600（仅本机）或 *:45600（所有网卡）；修改后需重启服务生效。本服务没有登录，监听所有网卡时同一网络内任何人都能操作，请同时设置下方访问令牌</div>
+                            </div>
+                            <div class="set-field">
+                                <label class="set-label">访问令牌
+                                    <span class="set-hint" x-text="tokenState.enabled ? '（已启用' + (tokenState.fromEnv ? '，来自环境变量 ACCESS_TOKEN' : '') + '）' : '（未启用）'"></span>
+                                </label>
+                                <template x-if="!tokenState.fromEnv">
+                                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                                        <input type="password" class="ui-input set-input" x-model="tokenState.input" placeholder="至少 8 个字符" autocomplete="new-password" style="flex:1;min-width:180px">
+                                        <button type="button" class="ui-btn ui-btn-primary" :disabled="!!(tokenState.busy || !tokenState.input)" @click="saveAccessToken(false)">设置</button>
+                                        <button type="button" class="ui-btn" x-show="tokenState.enabled" :disabled="!!tokenState.busy" @click="saveAccessToken(true)">关闭</button>
+                                    </div>
+                                </template>
+                                <div class="set-hint">启用后其他设备需先访问 http://地址:端口/?token=令牌 一次（浏览器记住后免输）；导出账号、修改自定义 API 地址/下载目录/监听地址仅允许本机或持有令牌的访问</div>
                             </div>
                         </div>
                     </div>

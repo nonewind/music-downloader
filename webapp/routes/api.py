@@ -51,6 +51,8 @@ from sqlalchemy import func
 
 from models import Account, Playlist, Setting, Song, DownloadTask, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
 from core.providers.base import MusicProvider
+from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
+                    is_trusted_request, set_token_cookie, token_from_env)
 from core.organizer import FileEntry, group_duplicates
 from organizer_manager import OrganizerBusyError
 from task_manager import (
@@ -1001,6 +1003,9 @@ def get_settings():
     for p in PLATFORMS:
         if not data.get(f"level_{p}"):
             data[f"level_{p}"] = legacy_level
+    # 访问令牌只回报状态，永不回显明文
+    data["access_token_enabled"] = bool(get_access_token())
+    data["access_token_from_env"] = token_from_env()
     return jsonify({"code": 0, "data": data})
 
 
@@ -1080,6 +1085,33 @@ def _validate_api_url(key: str, value: str) -> str:
     return ""
 
 
+# 仅可信来源（本机 / 网关 / 令牌）可修改的设置项：
+# - 自定义 API 地址与其开关：全部账号 Cookie 会发往该地址
+# - output_dir：音乐整理的删除/移动操作以下载目录为边界
+# - web_port：监听地址（改为对外监听即扩大暴露面）
+_TRUSTED_ONLY_SETTINGS = _URL_SETTINGS | {
+    "use_custom_api_url", "use_custom_qq_api_url", "use_custom_kugou_api_url",
+    "output_dir", "web_port",
+}
+
+
+def _is_sensitive_change(key: str, value) -> bool:
+    """该字段提交值是否构成敏感变更（设置页每次全量提交，未改动的字段不算）
+
+    - URL：清空不算（清空只会让请求回到内置服务）
+    - use_custom_*：只有打开算
+    - 其他：值与库内不同即算
+    """
+    from models import DEFAULT_SETTINGS
+    new = str(value if value is not None else "").strip()
+    cur = Setting.get(key, DEFAULT_SETTINGS.get(key, ""))
+    if key in _URL_SETTINGS:
+        return bool(new) and new != cur.strip()
+    if key.startswith("use_custom_"):
+        return new == "true" and cur != "true"
+    return new != str(cur).strip()
+
+
 @api_bp.route("/settings", methods=["PUT"])
 def save_settings():
     """保存配置（设置全局生效）
@@ -1093,6 +1125,13 @@ def save_settings():
     if not isinstance(data, dict):          # 保留原防御（_json_body 已保证 dict，此检查恒真，0 成本）
         return jsonify({"code": 1, "msg": "请求体必须是 JSON 对象"}), 400
     allowed = set(DEFAULT_SETTINGS.keys())
+
+    # 敏感项变更仅限可信来源（整次请求拒绝，避免部分保存造成状态不一致）
+    sensitive = sorted(k for k in _TRUSTED_ONLY_SETTINGS
+                       if k in data and _is_sensitive_change(k, data[k]))
+    if sensitive and not is_trusted_request():
+        logger.warning("拒绝来自 %s 的敏感设置修改: %s", request.remote_addr, ", ".join(sensitive))
+        return forbidden_untrusted("修改 " + "、".join(sensitive) + " ")
 
     # 自定义 API URL 校验：非法直接拒绝保存（白名单 keys 之外的 URL 类字段不受影响）
     for key in _URL_SETTINGS:
@@ -1152,6 +1191,29 @@ def save_settings():
     if warns:
         msg += "；" + "；".join(warns)
     return jsonify({"code": 0, "msg": msg})
+
+
+@api_bp.route("/settings/access-token", methods=["PUT"])
+def save_access_token():
+    """设置/清除访问令牌（仅可信来源）
+
+    请求体：{"token": "<新令牌>"}；空串表示关闭令牌校验。
+    成功时给调用方写入新令牌的 cookie，避免设置后立即把自己锁在门外。
+    令牌由环境变量 ACCESS_TOKEN 提供时不可在此修改。
+    """
+    if not is_trusted_request():
+        return forbidden_untrusted("修改访问令牌")
+    if token_from_env():
+        return jsonify({"code": 1, "msg": "访问令牌由环境变量 ACCESS_TOKEN 提供，请修改环境变量后重启"}), 400
+    token = str(_json_body().get("token") or "").strip()
+    if token and len(token) < 8:
+        return jsonify({"code": 1, "msg": "访问令牌至少 8 个字符"}), 400
+    Setting.set(TOKEN_SETTING_KEY, token)
+    resp = jsonify({"code": 0, "msg": "访问令牌已设置" if token else "访问令牌已关闭"})
+    if token:
+        set_token_cookie(resp, token)
+    logger.info("访问令牌已%s（来源 %s）", "设置" if token else "关闭", request.remote_addr)
+    return resp
 
 
 # ======================================================================
@@ -1610,7 +1672,13 @@ def import_accounts():
 
 @api_bp.route("/accounts/export")
 def export_accounts():
-    """导出所有账号信息为 JSON 文件（含 cookie，敏感）"""
+    """导出所有账号信息为 JSON 文件（含 cookie，敏感）
+
+    仅限可信来源（本机回环 / 飞牛网关 / 有效访问令牌），见 webapp/access.py
+    """
+    if not is_trusted_request():
+        logger.warning("拒绝来自 %s 的账号导出请求（非本机且无有效访问令牌）", request.remote_addr)
+        return forbidden_untrusted("导出账号（含全部平台 Cookie）")
     accounts = Account.query.order_by(Account.platform, Account.sort_order, Account.id).all()
     payload = {
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

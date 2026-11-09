@@ -59,6 +59,8 @@ function settingsPage() {
         // ---- 唯一状态入口 ----
         serviceList: SERVICE_DEFS,
         form: {},                 // loadSettings() 全量回填（含 organize_direct_delete）
+        // 访问令牌（不进 form/全量 payload：独立接口保存，后端永不回显明文）
+        tokenState: { enabled: false, fromEnv: false, input: "", busy: false },
         loading: true,
         saving: false,
         section: "general",       // 当前分类（hash 记忆，刷新/直达不丢）
@@ -120,6 +122,8 @@ function settingsPage() {
             try {
                 const data = await api("/api/settings");
                 this.applySettings(data.data || {});
+                this.tokenState.enabled = !!(data.data && data.data.access_token_enabled);
+                this.tokenState.fromEnv = !!(data.data && data.data.access_token_from_env);
             } catch (e) {
                 showToast(e.message, "错误", "error");
             } finally {
@@ -142,7 +146,7 @@ function settingsPage() {
                 : String(rawScope).split(",").map(x => x.trim()).filter(Boolean);
             this.form = {
                 // Web / API 服务
-                web_port: s.web_port || "*:45600",
+                web_port: s.web_port || "127.0.0.1:45600",
                 ncm_api_port: s.ncm_api_port || "45601",
                 ncm_api_auto_start: s.ncm_api_auto_start === "true",
                 use_custom_api_url: s.use_custom_api_url === "true",
@@ -234,6 +238,26 @@ function settingsPage() {
                 sync_times: txt(f.sync_times),
                 sync_jitter: txt(f.sync_jitter),
             };
+        },
+
+        async saveAccessToken(clear = false) {
+            if (this.tokenState.busy) return;
+            const token = clear ? "" : String(this.tokenState.input || "").trim();
+            if (!clear && !token) return;
+            this.tokenState.busy = true;
+            try {
+                const data = await api("/api/settings/access-token", {
+                    method: "PUT",
+                    body: JSON.stringify({ token }),
+                });
+                showToast(data.msg, "成功", "success");
+                this.tokenState.input = "";
+                this.tokenState.enabled = !!token;
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.tokenState.busy = false;
+            }
         },
 
         async save() {

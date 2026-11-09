@@ -17,7 +17,7 @@
 //   POST   /api/accounts/<aid>/move     {direction: "up"|"down"}
 //   POST   /api/accounts/<aid>/test     测试登录（酷狗成功文案由后端拼「下载实测」说明）
 //   POST   /api/accounts/import         JSON body（文件内容原样转发，与旧页一致非 FormData）
-//   GET    /api/accounts/export         仅管理员；window.location 直跳必须拼 APP_BASE
+//   GET    /api/accounts/export         仅本机/网关/令牌；fetch 后 blob 下载，必须拼 APP_BASE
 //   POST   /api/{ncm|qq|kugou}/qr/create|check  扫码登录（create 70s / check 30s 超时；
 //          2.5s 轮询；status 酷狗语义 0=过期 1=等待扫码 2=已扫码待确认 3=拒绝 4=成功含 cookie）
 //
@@ -350,7 +350,28 @@ function accountsPage() {
                 confirmText: "导出",
             });
             if (!ok) return;
-            window.location.href = (window.APP_BASE || "") + "/api/accounts/export";
+            // 先 fetch 再触发下载：导出仅限本机/网关/令牌访问，被拒（403）时
+            // 直跳会把 JSON 错误页甩给用户，改为 toast 展示后端提示
+            try {
+                const resp = await fetch((window.APP_BASE || "") + "/api/accounts/export");
+                if (!resp.ok) {
+                    let msg = "";
+                    try { msg = (await resp.json()).msg || ""; } catch (_) {}
+                    throw new Error(msg || `导出失败 (HTTP ${resp.status})`);
+                }
+                const cd = resp.headers.get("Content-Disposition") || "";
+                const m = cd.match(/filename="([^"]+)"/);
+                const blob = await resp.blob();
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = m ? m[1] : "accounts_export.json";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            }
         },
 
         // ============================================================

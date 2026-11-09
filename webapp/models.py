@@ -10,6 +10,7 @@
 - Setting：配置项 key-value
 """
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -355,6 +356,15 @@ class FileMd5Cache(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+# 新装默认 Web 监听地址：仅本机
+DEFAULT_WEB_PORT = "127.0.0.1:45600"
+
+
+def default_web_port() -> str:
+    """首次写库时使用的 web_port：环境变量 WEB_PORT_DEFAULT 优先（Docker 用）"""
+    return (os.environ.get("WEB_PORT_DEFAULT") or "").strip() or DEFAULT_WEB_PORT
+
+
 # 默认配置项
 DEFAULT_SETTINGS = {
     # 网易云API服务相关
@@ -375,8 +385,11 @@ DEFAULT_SETTINGS = {
     # 酷狗音乐自定义API服务URL（勾选 use_custom_kugou_api_url 时生效）
     "use_custom_kugou_api_url": "false",
     "kugou_api_base_url": "http://127.0.0.1:45603",
-    # Web 服务监听地址（host:port，* 表示监听所有网卡）
-    "web_port": "*:45600",
+    # Web 服务监听地址（host:port，* 表示监听所有网卡）。
+    # 新装默认只监听本机（无登录体系，监听全部网卡等于把账号 Cookie 暴露给
+    # 整个局域网）；Docker 镜像经 WEB_PORT_DEFAULT 环境变量改为 0.0.0.0:45600。
+    # 只影响首次写入，存量库已保存的值不变（见 init_db / default_web_port）
+    "web_port": DEFAULT_WEB_PORT,
     "output_dir": "downloads",
     # 文件名包含专辑名（歌手 - 歌名 [专辑].ext）：同歌手同名不同版本可共存
     "filename_include_album": "true",
@@ -718,6 +731,8 @@ def init_db(app, db_path: str = "downloads.db") -> None:
         # 写入缺失的默认配置
         for key, value in DEFAULT_SETTINGS.items():
             if not db.session.get(Setting, key):
+                if key == "web_port":
+                    value = default_web_port()
                 db.session.add(Setting(key=key, value=value))
         db.session.commit()
         # 兼容迁移：songs.id 单列主键 → (id, platform) 复合主键
