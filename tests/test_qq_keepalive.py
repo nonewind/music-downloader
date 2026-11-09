@@ -9,7 +9,6 @@
   （cookie 失效/缺刷新字段）不动账号
 """
 
-import pytest
 
 from core.providers.qq.client import QqClient, merge_refreshed_cookie
 from models import Account, db
@@ -151,7 +150,7 @@ def test_keepalive_persists_refreshed_cookie(webapp_app, monkeypatch):
     tm._qq_cookie_keepalive()
 
     db.session.expire_all()
-    acc = Account.query.get(acc.id)
+    acc = db.session.get(Account, acc.id)
     assert "Q_H_L_newkey" in acc.cookie
     assert "psrf_qqrefresh_token=RT_NEW" in acc.cookie
     assert "ptcz=keepme" in acc.cookie
@@ -172,5 +171,5 @@ def test_keepalive_keeps_cookie_when_refresh_fails(webapp_app, monkeypatch):
     tm._qq_cookie_keepalive()
 
     db.session.expire_all()
-    acc = Account.query.get(acc.id)
+    acc = db.session.get(Account, acc.id)
     assert acc.cookie == WEB_COOKIE

@@ -7,7 +7,6 @@ HTTP 全部通过 monkeypatch 打在 requests.get 上（core.downloader 以
 import logging
 from pathlib import Path
 
-import pytest
 
 from core import downloader
 

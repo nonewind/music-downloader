@@ -112,9 +112,16 @@ RUN set -eux; \
 WORKDIR /app
 # /data   — persistent app state (SQLite DB, logs, ncm tmp)
 # /app/downloads — large media files (kept on a separate mount by convention)
+# WEB_PORT_DEFAULT: new databases default web_port to 127.0.0.1:45600 (host
+# installs must not be LAN-reachable without an access token). Inside a
+# container that would be unreachable through the published port, so the image
+# seeds 0.0.0.0:45600 instead. Only used when the DB has no web_port yet —
+# existing /data volumes keep their stored value. Restrict exposure with the
+# host-side port mapping (e.g. "127.0.0.1:45600:45600") and/or ACCESS_TOKEN.
 ENV APP_DATA_DIR=/data \
     DATA_DIR=/data \
-    DOWNLOADS_DIR=/app/downloads
+    DOWNLOADS_DIR=/app/downloads \
+    WEB_PORT_DEFAULT=0.0.0.0:45600
 RUN mkdir -p /data /app/downloads && chown -R deen:deen /data /app/downloads
 
 # Copy API binaries + app source last (changes most often → top of layer cache).
@@ -144,11 +151,11 @@ USER deen
 # mount a pre-seeded DB to bake in an override.
 EXPOSE 45600
 
-# Health check: probe /login (returns 200 even unauthenticated; / would just
-# 302-redirect there, which urllib follows and then asserts against).
+# Health check: probe /healthz (exempt from the optional access token, returns
+# no data).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request,sys; \
-r=urllib.request.urlopen('http://127.0.0.1:45600/login', timeout=2); \
+r=urllib.request.urlopen('http://127.0.0.1:45600/healthz', timeout=2); \
 sys.exit(0 if r.status==200 else 1)" || exit 1
 
 # tini as PID 1 → Flask receives SIGTERM cleanly, runs its atexit hook, and the

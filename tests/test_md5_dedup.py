@@ -198,7 +198,7 @@ def test_download_rolls_back_on_duplicate(dedup_harness):
         status="success"))
     db.session.commit()
 
-    dl = h["set_content"](b"duplicate-content")
+    h["set_content"](b"duplicate-content")
     pk = h["make_task"]("777")
     h["run"](pk, "777")
 
@@ -280,3 +280,28 @@ def test_download_rolls_back_flac_with_different_tags(dedup_harness, tmp_path):
     assert existing.exists()
     song = Song.query.filter_by(id="777", platform="netease").first()
     assert song.file_path == str(existing)
+
+
+def test_force_redownload_refreshes_downloaded_at(dedup_harness):
+    """已有 success 记录的重下（force/升级）须刷新 downloaded_at：
+
+    月/小时额度按 Song.downloaded_at 统计，merge 到已有行时列 default
+    不生效，旧时间会让本次下载漏计额度
+    """
+    from datetime import datetime, timedelta
+
+    h = dedup_harness
+    old_time = datetime.now() - timedelta(days=60)
+    db.session.add(Song(
+        id="777", platform="netease", name="测试歌曲", artists="测试歌手",
+        album="专辑B", duration_ms=0, quality="standard",
+        file_path="", file_size=0, status="success", downloaded_at=old_time))
+    db.session.commit()
+
+    h["set_content"](b"fresh-bytes")
+    pk = h["make_task"]("777")
+    h["run"](pk, "777")
+
+    assert h["task_row"](pk).status == "done"
+    song = Song.query.filter_by(id="777", platform="netease").first()
+    assert song.downloaded_at > datetime.now() - timedelta(minutes=1)

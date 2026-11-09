@@ -10,10 +10,8 @@ API 地址每次请求时经 base_url 属性动态解析，无需手动指定。
 """
 
 import logging
-import re
 import time
 import weakref
-from typing import Any
 
 import requests
 

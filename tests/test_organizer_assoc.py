@@ -261,9 +261,9 @@ def test_three_downloads_two_files_associated(admin_client, manager, tmp_path,
     a = _make_audio(out_dir, "晴天-12345.mp3", size=100)
     b = _make_audio(out_dir, "晴天-12345.flac", size=1000)
     fake_audio_factory(tags={"title": "晴天"})
-    t1 = _make_task("netease", "12345", a, song_name="旧下载",
-                    created_at=datetime(2026, 1, 1),
-                    updated_at=datetime(2026, 1, 1))
+    _make_task("netease", "12345", a, song_name="旧下载",
+                created_at=datetime(2026, 1, 1),
+                updated_at=datetime(2026, 1, 1))
     t2 = _make_task("netease", "12345", a, song_name="最新下载",
                     quality="lossless", created_at=datetime(2026, 3, 1),
                     updated_at=datetime(2026, 3, 1))
@@ -327,7 +327,7 @@ def test_history_exists_file_missing(admin_client, manager, tmp_path,
     out_dir = _setup_out_dir(tmp_path)
     a = _make_audio(out_dir, "晴天-12345.mp3", size=100)
     fake_audio_factory(tags={"title": "晴天"})
-    task = _make_task("netease", "12345", a, quality="exhigh", file_size=100)
+    _make_task("netease", "12345", a, quality="exhigh", file_size=100)
     db.session.commit()
     _run(manager, manager.submit_scan().id)
     assert _row(a).status == "active"

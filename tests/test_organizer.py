@@ -354,7 +354,7 @@ def _setup_out_dir(tmp_path):
 # ======================================================================
 def test_scan_endpoint_returns_job_id_and_duplicates(admin_client, tmp_path):
     """POST scan 只入队返回 job_id；分组结果经 GET duplicates 读取"""
-    from models import OrganizerJob
+    from models import OrganizerJob, db
     from organizer_manager import OrganizerManager
 
     out_dir = _setup_out_dir(tmp_path)
@@ -371,7 +371,7 @@ def test_scan_endpoint_returns_job_id_and_duplicates(admin_client, tmp_path):
     assert body["code"] == 0
     assert body["data"]["status"] == "pending"
     jid = body["data"]["job_id"]
-    assert OrganizerJob.query.get(jid) is not None
+    assert db.session.get(OrganizerJob, jid) is not None
 
     mgr.run_job(jid)                        # 测试内同步执行，不依赖线程
 

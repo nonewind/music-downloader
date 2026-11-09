@@ -41,6 +41,10 @@ class DownloadAborted(Exception):
         self.part_path = part_path
 
 
+class _TransferCheckError(IOError):
+    """传输完成后的大小校验失败（走重试，按网络类失败记 WARNING）"""
+
+
 class DownloadOutcome(NamedTuple):
     """下载结果
 
@@ -121,7 +125,6 @@ def _fit_path(path: Path, max_path_len: int = 240, protected_suffix: str = "") -
         tail_len = len(protected_suffix)
 
     if len(stem) > available:
-        original = stem
         if tail_len:
             budget = available - tail_len
             if budget <= 10:
@@ -362,11 +365,11 @@ class Downloader:
 
                 actual = tmp.stat().st_size
                 if expected_size and actual < expected_size - 1024:
-                    raise IOError(f"文件大小不匹配: 期望 {expected_size}, 实际 {actual}")
+                    raise _TransferCheckError(f"文件大小不匹配: 期望 {expected_size}, 实际 {actual}")
                 # 上限校验（#29）：actual 显著大于 expected（>1MB 容差，容忍
                 # chunked/头部差异）说明上游返回了脏数据/劫持响应，拒绝落盘
                 if expected_size and actual > expected_size + 1024 * 1024:
-                    raise IOError(f"文件大小超出预期: 期望 {expected_size}, 实际 {actual}")
+                    raise _TransferCheckError(f"文件大小超出预期: 期望 {expected_size}, 实际 {actual}")
 
                 # overwrote：落盘前目标已存在（本次替换了既有文件，
                 # 如大小不符重下 / overwrite 模式），供调用方审计
@@ -380,15 +383,18 @@ class Downloader:
                 # 必须置于最前：否则会被下面的 except Exception 捕获 →
                 # 记日志 → 进入重试 → 最终 return None，用户的中止被当失败
                 raise
+            except (requests.RequestException, _TransferCheckError) as e:
+                # 网络/校验类失败（可重试的常态）。必须先于 OSError 捕获：
+                # RequestException 与 IOError 都是 OSError 子类，顺序反了会被
+                # 当作本地文件错误以 ERROR + [Errno 0] 记录，误导排查
+                logger.warning(
+                    "下载 %s 第 %d/%d 次失败: %s",
+                    filename, attempt, self.max_retries, e,
+                )
             except OSError as e:
                 logger.error(
                     "下载 %s 第 %d/%d 次失败 [Errno %d]: %s (路径: %s)",
                     filename, attempt, self.max_retries, e.errno or 0, e, target,
-                )
-            except (requests.RequestException, IOError) as e:
-                logger.warning(
-                    "下载 %s 第 %d/%d 次失败: %s",
-                    filename, attempt, self.max_retries, e,
                 )
             except Exception as e:
                 logger.error(

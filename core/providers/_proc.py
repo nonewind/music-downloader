@@ -10,7 +10,7 @@
   即发 SIGTERM"，并在设置后回查 getppid()，消除"父进程恰好在设置前退出"的竞态
   （父已退出则子进程被 init 收养，ppid 变为 1，此时自杀）。
 
-spawn_protected 是本模块对外唯一入口，两个 bridge（qq/netease）共用同一行调用；
+spawn_protected 是本模块对外唯一入口，由 bridge 公共基类（_bridge_base.ApiBridge）调用；
 平台差异集中收敛于此，便于维护。任一平台机制初始化失败时静默回退为朴素 Popen，
 此时正常退出仍由 bridge.stop() / atexit 兜底。
 """

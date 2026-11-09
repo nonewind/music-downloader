@@ -13,8 +13,9 @@ import logging
 import os
 import re
 import shutil
-import sys
 from pathlib import Path
+
+from paths import output_dir_path
 
 logger = logging.getLogger(__name__)
 
@@ -56,16 +57,8 @@ def count_pending(app) -> int:
 
 
 def _resolve_output(setting_get) -> Path:
-    """解析下载输出目录（与 task_manager._get_downloader 同款逻辑）"""
-    output_dir = Path(setting_get("output_dir", "downloads"))
-    if not output_dir.is_absolute():
-        if getattr(sys, "frozen", False):
-            root = Path(sys.executable).resolve().parent
-        else:
-            # migrate_layout.py 位于 webapp/，项目根为上级目录
-            root = Path(__file__).resolve().parent.parent
-        output_dir = root / output_dir
-    return output_dir
+    """解析下载输出目录（规则见 paths.output_dir_path）"""
+    return output_dir_path(setting_get("output_dir", "downloads"))
 
 
 def run(app) -> tuple[int, int, int, int] | None:

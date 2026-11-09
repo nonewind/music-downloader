@@ -62,7 +62,9 @@ def _parse_data_dir_arg(argv=None):
 
 from flask import Flask, request
 
-from models import init_db, Setting
+from models import init_db, Setting, default_web_port
+from access import (init_access_control, is_public_bind, parse_web_bind,
+                    get_access_token)
 from task_manager import TaskManager
 from organizer_manager import OrganizerManager
 from core.providers.kugou import bridge as kugou_bridge
@@ -145,6 +147,9 @@ if GATEWAY_SOCKET and os.environ.get("APP_DATA_DIR"):
             Setting.set("output_dir", _default_downloads)
             logger.info("网关模式首启：默认下载目录固定为 %s", _default_downloads)
 
+# 访问控制（可选访问令牌 + 敏感操作仅限本机/网关/令牌，见 webapp/access.py）
+init_access_control(app, gateway_mode=bool(GATEWAY_SOCKET))
+
 # 注册蓝图
 app.register_blueprint(views_bp)
 app.register_blueprint(api_bp, url_prefix="/api")
@@ -197,28 +202,16 @@ def filesize_filter(size: int) -> str:
 
 
 def _read_web_bind() -> tuple:
-    """从设置读取 web 服务监听地址（启动时调用）
+    """读取 web 服务监听地址（启动时调用）
 
-    支持格式: "host:port"、":port"、"port"、"*:port"
-    返回 (host, port) 元组
+    优先级：环境变量 WEB_PORT（不写库，仅本次进程生效）> 设置项 web_port
+    > 新装默认值（models.default_web_port）。格式见 access.parse_web_bind。
     """
-    with app.app_context():
-        raw = str(Setting.get("web_port", "*:45600")).strip()
-
-    # 纯端口号，默认监听所有网卡
-    if ":" not in raw:
-        try:
-            return ("0.0.0.0", int(raw))
-        except (TypeError, ValueError):
-            return ("0.0.0.0", 45600)
-
-    host, _, port_str = raw.rpartition(":")
-    if host == "" or host == "*":
-        host = "0.0.0.0"
-    try:
-        return (host, int(port_str))
-    except (TypeError, ValueError):
-        return ("0.0.0.0", 45600)
+    raw = (os.environ.get("WEB_PORT") or "").strip()
+    if not raw:
+        with app.app_context():
+            raw = str(Setting.get("web_port", default_web_port())).strip()
+    return parse_web_bind(raw)
 
 
 class PrefixMiddleware:
@@ -341,7 +334,14 @@ def main() -> None:
     if GATEWAY_SOCKET:
         logger.info("飞牛统一网关模式: socket=%s prefix=%s", GATEWAY_SOCKET, GATEWAY_PREFIX or "(未配置)")
     else:
-        logger.info("访问地址: http://localhost:%d", port)
+        logger.info("访问地址: http://localhost:%d (监听 %s)", port, host)
+        with app.app_context():
+            has_token = bool(get_access_token())
+        if is_public_bind(host) and not has_token:
+            logger.warning(
+                "Web 服务监听 %s 且未设置访问令牌：同一网络内任何人都可操作本服务"
+                "（下载、删除下载目录内文件等）。建议设置 ACCESS_TOKEN 环境变量或"
+                " access_token 设置项，或把 web_port 改为 127.0.0.1:%d", host, port)
     logger.info("=" * 50)
     try:
         serve(app, GATEWAY_SOCKET, GATEWAY_PREFIX, host, port)

@@ -8,7 +8,6 @@
 
 import sqlite3
 
-import pytest
 from flask import Flask
 from sqlalchemy import inspect, text
 
@@ -75,7 +74,7 @@ def test_downloadtask_snapshot_defaults_and_to_dict(webapp_app):
     (app,) = webapp_app
     task = _add_task()
     db.session.expire_all()  # 丢弃会话缓存，从库中重读默认值
-    t = DownloadTask.query.get(task.pk)
+    t = db.session.get(DownloadTask, task.pk)
 
     assert t.quality == ""
     assert t.file_path == ""
@@ -142,7 +141,7 @@ def test_success_snapshot_assignment_persists(webapp_app, tmp_path):
     # ── 与 webapp/task_manager.py 成功入库段同款赋值 ──
     actual_level = "lossless"
     path = audio
-    t = DownloadTask.query.get(pk)
+    t = db.session.get(DownloadTask, pk)
     t.status = "done"
     t.progress = 100
     t.quality = actual_level
@@ -152,7 +151,7 @@ def test_success_snapshot_assignment_persists(webapp_app, tmp_path):
     # ──────────────────────────────────────────────
 
     db.session.expire_all()
-    t2 = DownloadTask.query.get(pk)
+    t2 = db.session.get(DownloadTask, pk)
     assert t2.quality == "lossless"
     assert t2.file_path == str(audio)
     assert t2.file_size == 2048
@@ -167,14 +166,14 @@ def test_success_snapshot_missing_file_sizes_zero(webapp_app, tmp_path):
     pk = task.pk
 
     path = missing
-    t = DownloadTask.query.get(pk)
+    t = db.session.get(DownloadTask, pk)
     t.quality = "standard"
     t.file_path = str(path)
     t.file_size = path.stat().st_size if path.exists() else 0
     db.session.commit()
 
     db.session.expire_all()
-    t2 = DownloadTask.query.get(pk)
+    t2 = db.session.get(DownloadTask, pk)
     assert t2.file_size == 0
 
 

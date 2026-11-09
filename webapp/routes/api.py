@@ -41,7 +41,6 @@
 
 import logging
 import shutil
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 import json as _json
@@ -51,11 +50,15 @@ from sqlalchemy import func
 
 from models import Account, Playlist, Setting, Song, DownloadTask, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
 from core.providers.base import MusicProvider
+from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
+                    is_trusted_request, set_token_cookie, token_from_env)
 from core.organizer import FileEntry, group_duplicates
 from organizer_manager import OrganizerBusyError
+from paths import current_output_dir
 from task_manager import (
     UPGRADE_BATCH_LIMIT,
     UPGRADE_COOLDOWN_DAYS,
+    _month_start,
     find_upgrade_candidates,
 )
 from core.providers.netease.parse_links import parse_playlist_id
@@ -71,19 +74,21 @@ api_bp = Blueprint("api", __name__)
 logger = logging.getLogger(__name__)
 
 
-def _month_start() -> datetime:
-    """本月 1 号 0 点"""
-    now = datetime.now()
-    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+def _monthly_counts(account_ids) -> dict[int, int]:
+    """批量统计账号本月成功下载数（一次 GROUP BY，无记录的账号不在结果中）"""
+    ids = list(account_ids)
+    if not ids:
+        return {}
+    return dict(db.session.query(Song.account_id, func.count(Song.id)).filter(
+        Song.account_id.in_(ids),
+        Song.status == "success",
+        Song.downloaded_at >= _month_start(),
+    ).group_by(Song.account_id).all())
 
 
 def _monthly_downloaded(account_id: int) -> int:
     """统计账号本月成功下载数"""
-    return db.session.query(func.count(Song.id)).filter(
-        Song.account_id == account_id,
-        Song.status == "success",
-        Song.downloaded_at >= _month_start(),
-    ).scalar() or 0
+    return _monthly_counts([account_id]).get(account_id, 0)
 
 
 def _refresh_account_info(acc: Account, cookie: str | None = None) -> str:
@@ -98,10 +103,8 @@ def _refresh_account_info(acc: Account, cookie: str | None = None) -> str:
     Returns:
         提示信息：空串=正常；非空=部分成功提示（如 QQ 昵称未取到）
     """
-    if acc.platform == "qq":
-        return _refresh_qq_account_info(acc, cookie)
-    if acc.platform == "kugou":
-        return _refresh_kugou_account_info(acc, cookie)
+    if acc.platform in ("qq", "kugou"):
+        return _refresh_user_info_account(acc, cookie, acc.platform)
     if acc.platform != "netease":
         return ""
     use_cookie = cookie if cookie is not None else (acc.cookie or "")
@@ -144,12 +147,29 @@ def _refresh_account_info(acc: Account, cookie: str | None = None) -> str:
     return ""
 
 
-def _refresh_qq_account_info(acc: Account, cookie: str | None = None) -> str:
-    """刷新QQ音乐账号信息（会员等级、到期时间）
+def _apply_user_info(acc: Account, info: dict, keep_nickname: bool) -> None:
+    """把 QQ/酷狗 get_user_info 的归一结果写回账号（不 commit）
 
-    调 QQ API /user/get_vip_info。cookie 无效（HTTP 401）时保留账号原有
-    信息不覆盖（避免误清空），记日志返回空提示。新服务端无昵称接口，
-    昵称保留存量值。
+    keep_nickname: 上游昵称为空时保留存量昵称（QQ 新服务端无昵称接口）
+    """
+    if info.get("nickname") or not keep_nickname:
+        acc.nickname = info.get("nickname") or ""
+    acc.vip_type = info.get("vip_type") or 0
+    acc.vip_expire_at = None
+    expire_ts = info.get("vip_expire_ts") or 0
+    if expire_ts > 0:
+        try:
+            acc.vip_expire_at = datetime.fromtimestamp(expire_ts)
+        except (TypeError, ValueError, OSError, OverflowError):
+            pass
+    acc.last_check_at = datetime.now()
+
+
+def _refresh_user_info_account(acc: Account, cookie: str | None, platform: str) -> str:
+    """刷新 QQ音乐 / 酷狗音乐 账号信息（会员等级、到期时间、昵称）
+
+    QQ 调 /user/get_vip_info、酷狗调 /user/detail。cookie 无效或接口异常时
+    保留账号原有信息不覆盖（避免误清空），记日志返回空提示。
 
     Returns:
         提示信息：空串=完全正常
@@ -157,60 +177,16 @@ def _refresh_qq_account_info(acc: Account, cookie: str | None = None) -> str:
     use_cookie = cookie if cookie is not None else (acc.cookie or "")
     if not use_cookie:
         return ""
+    label = PLATFORM_NAMES.get(platform, platform)
     try:
-        client = _create_client(cookie=use_cookie, platform="qq")
-        info = client.get_user_info()
+        info = _create_client(cookie=use_cookie, platform=platform).get_user_info()
         if not info.get("ok"):
-            logger.warning("刷新QQ音乐账号信息失败 (%s): %s", acc.name, info.get("msg"))
+            logger.warning("刷新%s账号信息失败 (%s): %s", label, acc.name, info.get("msg"))
             return ""
-        acc.vip_type = info.get("vip_type") or 0
-        # 新服务端无昵称接口（返回空串），仅在取到时覆盖，避免误清空存量昵称
-        if info.get("nickname"):
-            acc.nickname = info.get("nickname")
-        expire_ts = info.get("vip_expire_ts") or 0
-        if expire_ts > 0:
-            try:
-                acc.vip_expire_at = datetime.fromtimestamp(expire_ts)
-            except (TypeError, ValueError, OSError, OverflowError):
-                acc.vip_expire_at = None
-        else:
-            acc.vip_expire_at = None
-        acc.last_check_at = datetime.now()
+        _apply_user_info(acc, info, keep_nickname=(platform == "qq"))
         return info.get("msg") or ""
     except Exception as e:
-        logger.warning("刷新QQ音乐账号信息失败 (%s): %s", acc.name, e)
-    return ""
-
-
-def _refresh_kugou_account_info(acc: Account, cookie: str | None = None) -> str:
-    """刷新酷狗音乐账号信息（昵称/VIP 状态）
-
-    调 /user/detail，需 token+userid Cookie。失败时保留账号原有信息
-    不覆盖（与 QQ 行为一致），记日志返回空提示。
-    """
-    use_cookie = cookie if cookie is not None else (acc.cookie or "")
-    if not use_cookie:
-        return ""
-    try:
-        client = _create_client(cookie=use_cookie, platform="kugou")
-        info = client.get_user_info()
-        if not info.get("ok"):
-            logger.warning("刷新酷狗音乐账号信息失败 (%s): %s", acc.name, info.get("msg"))
-            return ""
-        acc.nickname = info.get("nickname") or ""
-        acc.vip_type = info.get("vip_type") or 0
-        expire_ts = info.get("vip_expire_ts") or 0
-        if expire_ts > 0:
-            try:
-                acc.vip_expire_at = datetime.fromtimestamp(expire_ts)
-            except (TypeError, ValueError, OSError, OverflowError):
-                acc.vip_expire_at = None
-        else:
-            acc.vip_expire_at = None
-        acc.last_check_at = datetime.now()
-        return info.get("msg") or ""
-    except Exception as e:
-        logger.warning("刷新酷狗音乐账号信息失败 (%s): %s", acc.name, e)
+        logger.warning("刷新%s账号信息失败 (%s): %s", label, acc.name, e)
     return ""
 
 
@@ -388,14 +364,14 @@ def add_playlist():
 def update_playlist(pid: int):
     """更新歌单设置（enabled / limit_count / name）"""
     # platform 优先从 body 取、缺失回退 query（向后兼容，老脚本不传 platform
-    # 仍按原逻辑 Playlist.query.get(pid)），避免同 ID 跨平台歌单混淆。
+    # 仍按原逻辑 db.session.get(Playlist, pid)），避免同 ID 跨平台歌单混淆。
     # 统一走 _json_body()（silent=True + isinstance 归一）：原
     # request.get_json(force=True) 在空体/非法 JSON 时抛 BadRequest，
     # Flask 返回 HTML 400 页，前端 resp.json() 抛 SyntaxError
     body = _json_body()
     platform = (body.get("platform") or request.args.get("platform") or "").strip()
     pl = (Playlist.query.filter_by(id=pid, platform=platform).first()
-          if platform else Playlist.query.get(pid))
+          if platform else db.session.get(Playlist, pid))
     if not pl:
         return jsonify({"code": 1, "msg": "歌单不存在"})
 
@@ -420,7 +396,7 @@ def delete_playlist(pid: int):
     # DELETE 无 body，platform 从 query 取；缺失时回退纯主键查询（向后兼容）
     platform = request.args.get("platform", "").strip()
     pl = (Playlist.query.filter_by(id=pid, platform=platform).first()
-          if platform else Playlist.query.get(pid))
+          if platform else db.session.get(Playlist, pid))
     if not pl:
         return jsonify({"code": 1, "msg": "歌单不存在"})
     name = pl.name
@@ -436,7 +412,7 @@ def delete_playlist(pid: int):
 @api_bp.route("/sync/<int:pid>", methods=["POST"])
 def sync_playlist(pid: int):
     """立即同步某个歌单"""
-    pl = Playlist.query.get(pid)
+    pl = db.session.get(Playlist, pid)
     if not pl:
         return jsonify({"code": 1, "msg": "歌单不存在"})
     tm = _get_task_manager()
@@ -650,7 +626,7 @@ def _delete_song_record(pk: int, delete_file: bool) -> tuple[bool, str]:
         - 两种模式均要求该歌曲无未结束任务（pending/downloading/paused），
           避免与下载中的 worker 竞态（任务行/Song 行被删后 worker 状态更新落空）。
     """
-    task = DownloadTask.query.get(pk)
+    task = db.session.get(DownloadTask, pk)
     if not task:
         return False, "记录不存在"
 
@@ -813,17 +789,8 @@ def batch_delete_songs():
 
 
 def _resolve_output_dir() -> Path:
-    """解析下载输出目录（与 task_manager._get_downloader 同款逻辑）"""
-    output_dir = Setting.get("output_dir", "downloads")
-    p = Path(output_dir)
-    if not p.is_absolute():
-        if getattr(sys, "frozen", False):
-            root = Path(sys.executable).resolve().parent
-        else:
-            # api.py 位于 webapp/routes/，项目根为上上级目录
-            root = Path(__file__).resolve().parent.parent.parent
-        p = root / output_dir
-    return p.resolve()
+    """解析下载输出目录（规则见 paths.output_dir_path，resolve 后返回）"""
+    return current_output_dir()
 
 
 def _delete_song_file(file_path: str) -> tuple[bool, str]:
@@ -1001,6 +968,9 @@ def get_settings():
     for p in PLATFORMS:
         if not data.get(f"level_{p}"):
             data[f"level_{p}"] = legacy_level
+    # 访问令牌只回报状态，永不回显明文
+    data["access_token_enabled"] = bool(get_access_token())
+    data["access_token_from_env"] = token_from_env()
     return jsonify({"code": 0, "data": data})
 
 
@@ -1080,6 +1050,33 @@ def _validate_api_url(key: str, value: str) -> str:
     return ""
 
 
+# 仅可信来源（本机 / 网关 / 令牌）可修改的设置项：
+# - 自定义 API 地址与其开关：全部账号 Cookie 会发往该地址
+# - output_dir：音乐整理的删除/移动操作以下载目录为边界
+# - web_port：监听地址（改为对外监听即扩大暴露面）
+_TRUSTED_ONLY_SETTINGS = _URL_SETTINGS | {
+    "use_custom_api_url", "use_custom_qq_api_url", "use_custom_kugou_api_url",
+    "output_dir", "web_port",
+}
+
+
+def _is_sensitive_change(key: str, value) -> bool:
+    """该字段提交值是否构成敏感变更（设置页每次全量提交，未改动的字段不算）
+
+    - URL：清空不算（清空只会让请求回到内置服务）
+    - use_custom_*：只有打开算
+    - 其他：值与库内不同即算
+    """
+    from models import DEFAULT_SETTINGS
+    new = str(value if value is not None else "").strip()
+    cur = Setting.get(key, DEFAULT_SETTINGS.get(key, ""))
+    if key in _URL_SETTINGS:
+        return bool(new) and new != cur.strip()
+    if key.startswith("use_custom_"):
+        return new == "true" and cur != "true"
+    return new != str(cur).strip()
+
+
 @api_bp.route("/settings", methods=["PUT"])
 def save_settings():
     """保存配置（设置全局生效）
@@ -1093,6 +1090,19 @@ def save_settings():
     if not isinstance(data, dict):          # 保留原防御（_json_body 已保证 dict，此检查恒真，0 成本）
         return jsonify({"code": 1, "msg": "请求体必须是 JSON 对象"}), 400
     allowed = set(DEFAULT_SETTINGS.keys())
+    # 开关类设置统一为 "true"/"false"：读取侧一律按 == "true" 判定，直接
+    # str(True) 得到 "True" 会让裸 API 调用方的开关被静默视为关闭。
+    # 必须先于敏感项判定：否则 JSON true 以 "True" 参与比较，被判为
+    # "未打开"而绕过可信来源校验，随后又按 "true" 落库
+    data = {k: ("true" if v else "false") if isinstance(v, bool) else v
+            for k, v in data.items()}
+
+    # 敏感项变更仅限可信来源（整次请求拒绝，避免部分保存造成状态不一致）
+    sensitive = sorted(k for k in _TRUSTED_ONLY_SETTINGS
+                       if k in data and _is_sensitive_change(k, data[k]))
+    if sensitive and not is_trusted_request():
+        logger.warning("拒绝来自 %s 的敏感设置修改: %s", request.remote_addr, ", ".join(sensitive))
+        return forbidden_untrusted("修改 " + "、".join(sensitive) + " ")
 
     # 自定义 API URL 校验：非法直接拒绝保存（白名单 keys 之外的 URL 类字段不受影响）
     for key in _URL_SETTINGS:
@@ -1103,18 +1113,13 @@ def save_settings():
 
     # 端口变化时校验：API服务运行中禁止修改端口（仅当请求体携带该字段时校验，
     # 避免裸 API 部分更新被误拦）
-    if "ncm_api_port" in data and str(data["ncm_api_port"]) != Setting.get("ncm_api_port", ""):
-        if bridge.get_bridge()._is_alive():
-            return jsonify({"code": 1,
-                            "msg": "API服务运行中，请先停止服务再修改端口"}), 400
-    if "qq_api_port" in data and str(data["qq_api_port"]) != Setting.get("qq_api_port", ""):
-        if qq_bridge.get_bridge()._is_alive():
-            return jsonify({"code": 1,
-                            "msg": "QQ音乐API服务运行中，请先停止服务再修改端口"}), 400
-    if "kugou_api_port" in data and str(data["kugou_api_port"]) != Setting.get("kugou_api_port", ""):
-        if kugou_bridge.get_bridge()._is_alive():
-            return jsonify({"code": 1,
-                            "msg": "酷狗音乐API服务运行中，请先停止服务再修改端口"}), 400
+    for port_key, bridge_mod, label in (
+            ("ncm_api_port", bridge, "API服务"),
+            ("qq_api_port", qq_bridge, "QQ音乐API服务"),
+            ("kugou_api_port", kugou_bridge, "酷狗音乐API服务")):
+        if (port_key in data and str(data[port_key]) != Setting.get(port_key, "")
+                and bridge_mod.get_bridge()._is_alive()):
+            return jsonify({"code": 1, "msg": f"{label}运行中，请先停止服务再修改端口"}), 400
 
     port_changed = False
     warns = []
@@ -1154,216 +1159,155 @@ def save_settings():
     return jsonify({"code": 0, "msg": msg})
 
 
-# ======================================================================
-# 内置 API 服务（NeteaseCloudMusicApi-enhanced）控制
-# ======================================================================
-@api_bp.route("/ncm/status")
-def ncm_status():
-    """获取内置 API 服务状态"""
-    return jsonify({"code": 0, "data": bridge.get_bridge().status()})
+@api_bp.route("/settings/access-token", methods=["PUT"])
+def save_access_token():
+    """设置/清除访问令牌（仅可信来源）
 
-
-@api_bp.route("/ncm/start", methods=["POST"])
-def ncm_start():
-    """启动内置 API 服务（幂等）"""
-    try:
-        url = bridge.get_bridge().start()
-        return jsonify({"code": 0, "msg": "网易云API服务已启动", "data": {"base_url": url}})
-    except RuntimeError as e:
-        return jsonify({"code": 1, "msg": str(e)}), 500
-
-
-@api_bp.route("/ncm/stop", methods=["POST"])
-def ncm_stop():
-    """停止内置 API 服务（幂等）"""
-    bridge.get_bridge().stop()
-    return jsonify({"code": 0, "msg": "网易云API服务已停止"})
-
-
-# ======================================================================
-# 内置 API 服务（qqmusic-api）控制
-# ======================================================================
-@api_bp.route("/qq/status")
-def qq_status():
-    """获取内置 QQ音乐API 服务状态"""
-    return jsonify({"code": 0, "data": qq_bridge.get_bridge().status()})
-
-
-@api_bp.route("/qq/start", methods=["POST"])
-def qq_start():
-    """启动内置 QQ音乐API 服务（幂等）"""
-    try:
-        url = qq_bridge.get_bridge().start()
-        return jsonify({"code": 0, "msg": "QQ音乐API服务已启动", "data": {"base_url": url}})
-    except RuntimeError as e:
-        return jsonify({"code": 1, "msg": str(e)}), 500
-
-
-@api_bp.route("/qq/stop", methods=["POST"])
-def qq_stop():
-    """停止内置 QQ音乐API 服务（幂等）"""
-    qq_bridge.get_bridge().stop()
-    return jsonify({"code": 0, "msg": "QQ音乐API服务已停止"})
-
-
-# ======================================================================
-# 内置 API 服务（kugou-api）控制
-# ======================================================================
-@api_bp.route("/kugou/status")
-def kugou_status():
-    """获取内置 酷狗音乐API 服务状态"""
-    return jsonify({"code": 0, "data": kugou_bridge.get_bridge().status()})
-
-
-@api_bp.route("/kugou/start", methods=["POST"])
-def kugou_start():
-    """启动内置 酷狗音乐API 服务（幂等）"""
-    try:
-        url = kugou_bridge.get_bridge().start()
-        return jsonify({"code": 0, "msg": "酷狗音乐API服务已启动", "data": {"base_url": url}})
-    except RuntimeError as e:
-        return jsonify({"code": 1, "msg": str(e)}), 500
-
-
-@api_bp.route("/kugou/stop", methods=["POST"])
-def kugou_stop():
-    """停止内置 酷狗音乐API 服务（幂等）"""
-    kugou_bridge.get_bridge().stop()
-    return jsonify({"code": 0, "msg": "酷狗音乐API服务已停止"})
-
-
-@api_bp.route("/kugou/qr/create", methods=["POST"])
-def kugou_qr_create():
-    """生成酷狗扫码登录二维码"""
-    try:
-        client = _create_client(platform="kugou")
-        r = client.create_qr_login()
-        if not r.get("ok"):
-            return jsonify({"code": 1, "msg": r.get("msg", "二维码生成失败")})
-        return jsonify({"code": 0, "data": {"key": r.get("key", ""),
-                                            "qr_img": r.get("qr_img", "")}})
-    except Exception as e:
-        logger.exception("酷狗扫码登录二维码生成失败: %s", e)
-        return jsonify({"code": 1, "msg": f"二维码生成失败: {e}"})
-
-
-@api_bp.route("/kugou/qr/check", methods=["POST"])
-def kugou_qr_check():
-    """轮询酷狗扫码登录状态
-
-    返回 status：0=二维码过期 1=等待扫码 2=已扫码待确认 4=成功（含 cookie）
+    请求体：{"token": "<新令牌>"}；空串表示关闭令牌校验。
+    成功时给调用方写入新令牌的 cookie，避免设置后立即把自己锁在门外。
+    令牌由环境变量 ACCESS_TOKEN 提供时不可在此修改。
     """
-    data = _json_body()
-    key = (data.get("key") or "").strip()
-    if not key:
-        return jsonify({"code": 1, "msg": "缺少二维码 key"})
+    if not is_trusted_request():
+        return forbidden_untrusted("修改访问令牌")
+    if token_from_env():
+        return jsonify({"code": 1, "msg": "访问令牌由环境变量 ACCESS_TOKEN 提供，请修改环境变量后重启"}), 400
+    token = str(_json_body().get("token") or "").strip()
+    if token and len(token) < 8:
+        return jsonify({"code": 1, "msg": "访问令牌至少 8 个字符"}), 400
+    Setting.set(TOKEN_SETTING_KEY, token)
+    resp = jsonify({"code": 0, "msg": "访问令牌已设置" if token else "访问令牌已关闭"})
+    if token:
+        set_token_cookie(resp, token)
+    logger.info("访问令牌已%s（来源 %s）", "设置" if token else "关闭", request.remote_addr)
+    return resp
+
+
+# ======================================================================
+# 内置 API 服务控制（ncm / qq / kugou 三平台同构，表驱动注册）
+# ----------------------------------------------------------------------
+#   GET  /api/<prefix>/status   服务状态
+#   POST /api/<prefix>/start    启动（幂等；失败 500 + 原因）
+#   POST /api/<prefix>/stop     停止（幂等）
+# ======================================================================
+# 路由前缀 → (bridge 模块, 服务中文名)。bridge 模块在请求时取 get_bridge()，
+# 保证始终拿到 main() 按用户配置创建的单例
+_BRIDGE_SERVICES = {
+    "ncm": (bridge, "网易云API服务"),
+    "qq": (qq_bridge, "QQ音乐API服务"),
+    "kugou": (kugou_bridge, "酷狗音乐API服务"),
+}
+
+
+def _register_bridge_routes(prefix: str, bridge_mod, label: str) -> None:
+    def status():
+        return jsonify({"code": 0, "data": bridge_mod.get_bridge().status()})
+
+    def start():
+        try:
+            url = bridge_mod.get_bridge().start()
+            return jsonify({"code": 0, "msg": f"{label}已启动", "data": {"base_url": url}})
+        except RuntimeError as e:
+            return jsonify({"code": 1, "msg": str(e)}), 500
+
+    def stop():
+        bridge_mod.get_bridge().stop()
+        return jsonify({"code": 0, "msg": f"{label}已停止"})
+
+    api_bp.add_url_rule(f"/{prefix}/status", f"{prefix}_status", status)
+    api_bp.add_url_rule(f"/{prefix}/start", f"{prefix}_start", start, methods=["POST"])
+    api_bp.add_url_rule(f"/{prefix}/stop", f"{prefix}_stop", stop, methods=["POST"])
+
+
+for _prefix, (_mod, _label) in _BRIDGE_SERVICES.items():
+    _register_bridge_routes(_prefix, _mod, _label)
+
+
+# ======================================================================
+# 扫码登录
+# ----------------------------------------------------------------------
+# 返回 status（三平台统一酷狗语义）：0=二维码过期 1=等待扫码 2=已扫码待确认
+# 3=用户拒绝授权（仅 QQ） 4=成功（含 cookie）
+# ======================================================================
+def _qr_call(platform: str, log_label: str, action: str, call, shape):
+    """扫码接口公共骨架：建客户端 → 调用 → ok 判定 → 组装 data；异常转业务错误码
+
+    Args:
+        action: 失败文案前缀（"二维码生成" / "状态查询"）
+        call: client -> 上游结果 dict
+        shape: 上游结果 dict -> 响应 data
+    """
     try:
-        client = _create_client(platform="kugou")
-        r = client.check_qr_login(key)
+        r = call(_create_client(platform=platform))
         if not r.get("ok"):
-            return jsonify({"code": 1, "msg": r.get("msg", "状态查询失败")})
-        out = {"status": r.get("status", 0)}
-        if r.get("cookie"):
-            out["cookie"] = r["cookie"]
-        return jsonify({"code": 0, "data": out})
+            return jsonify({"code": 1, "msg": r.get("msg", f"{action}失败")})
+        return jsonify({"code": 0, "data": shape(r)})
     except Exception as e:
-        logger.exception("酷狗扫码状态查询失败: %s", e)
-        return jsonify({"code": 1, "msg": f"状态查询失败: {e}"})
+        logger.exception("%s扫码%s失败: %s", log_label, action, e)
+        return jsonify({"code": 1, "msg": f"{action}失败: {e}"})
+
+
+def _qr_check_shape(r: dict) -> dict:
+    out = {"status": r.get("status", 0)}
+    if r.get("cookie"):
+        out["cookie"] = r["cookie"]
+    return out
+
+
+def _key_qr_shape(r: dict) -> dict:
+    return {"key": r.get("key", ""), "qr_img": r.get("qr_img", "")}
+
+
+def _register_key_qr_routes(prefix: str, platform: str, log_label: str) -> None:
+    """key 型扫码（网易云 / 酷狗）：create 返回 key，check 以 {"key"} 轮询"""
+    def create():
+        return _qr_call(platform, log_label, "二维码生成",
+                        lambda c: c.create_qr_login(), _key_qr_shape)
+
+    def check():
+        key = (_json_body().get("key") or "").strip()
+        if not key:
+            return jsonify({"code": 1, "msg": "缺少二维码 key"})
+        return _qr_call(platform, log_label, "状态查询",
+                        lambda c: c.check_qr_login(key), _qr_check_shape)
+
+    api_bp.add_url_rule(f"/{prefix}/qr/create", f"{prefix}_qr_create", create, methods=["POST"])
+    api_bp.add_url_rule(f"/{prefix}/qr/check", f"{prefix}_qr_check", check, methods=["POST"])
+
+
+_register_key_qr_routes("ncm", "netease", "网易云")
+_register_key_qr_routes("kugou", "kugou", "酷狗")
+
+
+def _qq_login_type() -> str | None:
+    """QQ 扫码登录方式（缺省 qq）；非法值返回 None"""
+    login_type = (_json_body().get("login_type") or "qq").strip().lower()
+    return login_type if login_type in ("qq", "wx") else None
 
 
 @api_bp.route("/qq/qr/create", methods=["POST"])
 def qq_qr_create():
-    """生成QQ音乐扫码登录二维码（QQ/微信二选一）
-
-    请求体：{"login_type": "qq" | "wx"}（缺省 qq）
-    """
-    data = _json_body()
-    login_type = (data.get("login_type") or "qq").strip().lower()
-    if login_type not in ("qq", "wx"):
+    """生成QQ音乐扫码登录二维码（请求体：{"login_type": "qq" | "wx"}，缺省 qq）"""
+    login_type = _qq_login_type()
+    if login_type is None:
         return jsonify({"code": 1, "msg": "login_type 仅支持 qq / wx"})
-    try:
-        client = _create_client(platform="qq")
-        r = client.create_qr_login(login_type)
-        if not r.get("ok"):
-            return jsonify({"code": 1, "msg": r.get("msg", "二维码生成失败")})
-        return jsonify({"code": 0,
-                        "data": {"identifier": r.get("identifier", ""),
-                                 "login_type": r.get("login_type", login_type),
-                                 "qr_img": r.get("qr_img", "")}})
-    except Exception as e:
-        logger.exception("QQ音乐扫码登录二维码生成失败: %s", e)
-        return jsonify({"code": 1, "msg": f"二维码生成失败: {e}"})
+    return _qr_call("qq", "QQ音乐", "二维码生成",
+                    lambda c: c.create_qr_login(login_type),
+                    lambda r: {"identifier": r.get("identifier", ""),
+                               "login_type": r.get("login_type", login_type),
+                               "qr_img": r.get("qr_img", "")})
 
 
 @api_bp.route("/qq/qr/check", methods=["POST"])
 def qq_qr_check():
-    """轮询QQ音乐扫码登录状态
-
-    请求体：{"login_type": "qq" | "wx", "identifier": "..."}
-    返回 status（酷狗语义，与 /kugou/qr/check 对齐）：
-    0=二维码过期 1=等待扫码 2=已扫码待确认 3=用户拒绝授权 4=成功（含 cookie）
-    """
-    data = _json_body()
-    identifier = (data.get("identifier") or "").strip()
+    """轮询QQ音乐扫码登录状态（请求体：{"login_type": "qq" | "wx", "identifier": "..."}）"""
+    identifier = (_json_body().get("identifier") or "").strip()
     if not identifier:
         return jsonify({"code": 1, "msg": "缺少二维码 identifier"})
-    login_type = (data.get("login_type") or "qq").strip().lower()
-    if login_type not in ("qq", "wx"):
+    login_type = _qq_login_type()
+    if login_type is None:
         return jsonify({"code": 1, "msg": "login_type 仅支持 qq / wx"})
-    try:
-        client = _create_client(platform="qq")
-        r = client.check_qr_login(login_type, identifier)
-        if not r.get("ok"):
-            return jsonify({"code": 1, "msg": r.get("msg", "状态查询失败")})
-        out = {"status": r.get("status", 0)}
-        if r.get("cookie"):
-            out["cookie"] = r["cookie"]
-        return jsonify({"code": 0, "data": out})
-    except Exception as e:
-        logger.exception("QQ音乐扫码状态查询失败: %s", e)
-        return jsonify({"code": 1, "msg": f"状态查询失败: {e}"})
-
-
-@api_bp.route("/ncm/qr/create", methods=["POST"])
-def ncm_qr_create():
-    """生成网易云扫码登录二维码"""
-    try:
-        client = _create_client(platform="netease")
-        r = client.create_qr_login()
-        if not r.get("ok"):
-            return jsonify({"code": 1, "msg": r.get("msg", "二维码生成失败")})
-        return jsonify({"code": 0, "data": {"key": r.get("key", ""),
-                                            "qr_img": r.get("qr_img", "")}})
-    except Exception as e:
-        logger.exception("网易云扫码登录二维码生成失败: %s", e)
-        return jsonify({"code": 1, "msg": f"二维码生成失败: {e}"})
-
-
-@api_bp.route("/ncm/qr/check", methods=["POST"])
-def ncm_qr_check():
-    """轮询网易云扫码登录状态
-
-    请求体：{"key": "..."}
-    返回 status（酷狗语义，与 /kugou/qr/check 对齐）：
-    0=二维码过期 1=等待扫码 2=已扫码待确认 4=成功（含 cookie）
-    （网易云上游无"用户拒绝授权"态，status 3 不会出现）
-    """
-    data = _json_body()
-    key = (data.get("key") or "").strip()
-    if not key:
-        return jsonify({"code": 1, "msg": "缺少二维码 key"})
-    try:
-        client = _create_client(platform="netease")
-        r = client.check_qr_login(key)
-        if not r.get("ok"):
-            return jsonify({"code": 1, "msg": r.get("msg", "状态查询失败")})
-        out = {"status": r.get("status", 0)}
-        if r.get("cookie"):
-            out["cookie"] = r["cookie"]
-        return jsonify({"code": 0, "data": out})
-    except Exception as e:
-        logger.exception("网易云扫码状态查询失败: %s", e)
-        return jsonify({"code": 1, "msg": f"状态查询失败: {e}"})
+    return _qr_call("qq", "QQ音乐", "状态查询",
+                    lambda c: c.check_qr_login(login_type, identifier), _qr_check_shape)
 
 
 # ======================================================================
@@ -1380,10 +1324,8 @@ def get_accounts():
         accounts = Account.query.filter_by(platform=platform).order_by(Account.sort_order, Account.id).all()
     else:
         accounts = Account.query.order_by(Account.platform, Account.sort_order, Account.id).all()
-    data = []
-    for acc in accounts:
-        d = acc.to_dict(monthly_downloaded=_monthly_downloaded(acc.id))
-        data.append(d)
+    counts = _monthly_counts(a.id for a in accounts)
+    data = [acc.to_dict(monthly_downloaded=counts.get(acc.id, 0)) for acc in accounts]
     return jsonify({"code": 0, "data": data})
 
 
@@ -1458,7 +1400,7 @@ def update_account(aid: int):
     请求体：{"name","cookie","quota_limit","enabled"} 中任意字段
     platform 在添加后不可修改；cookie 非空时重新测试登录（仅网易云）。
     """
-    acc = Account.query.get(aid)
+    acc = db.session.get(Account, aid)
     if not acc:
         return jsonify({"code": 1, "msg": "账号不存在"})
 
@@ -1487,7 +1429,7 @@ def update_account(aid: int):
 @api_bp.route("/accounts/<int:aid>", methods=["DELETE"])
 def delete_account(aid: int):
     """删除账号（已下载记录的 account_id 置 NULL，不删歌曲）"""
-    acc = Account.query.get(aid)
+    acc = db.session.get(Account, aid)
     if not acc:
         return jsonify({"code": 1, "msg": "账号不存在"})
     name = acc.name
@@ -1512,7 +1454,7 @@ def move_account(aid: int):
 
     请求体：{"direction": "up"|"down"}
     """
-    acc = Account.query.get(aid)
+    acc = db.session.get(Account, aid)
     if not acc:
         return jsonify({"code": 1, "msg": "账号不存在"})
     direction = _json_body().get("direction", "")
@@ -1610,7 +1552,13 @@ def import_accounts():
 
 @api_bp.route("/accounts/export")
 def export_accounts():
-    """导出所有账号信息为 JSON 文件（含 cookie，敏感）"""
+    """导出所有账号信息为 JSON 文件（含 cookie，敏感）
+
+    仅限可信来源（本机回环 / 飞牛网关 / 有效访问令牌），见 webapp/access.py
+    """
+    if not is_trusted_request():
+        logger.warning("拒绝来自 %s 的账号导出请求（非本机且无有效访问令牌）", request.remote_addr)
+        return forbidden_untrusted("导出账号（含全部平台 Cookie）")
     accounts = Account.query.order_by(Account.platform, Account.sort_order, Account.id).all()
     payload = {
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1644,52 +1592,39 @@ def test_account_login(aid: int):
 
     netease / qq / kugou 平台支持登录测试；其他平台返回暂不支持。
     """
-    acc = Account.query.get(aid)
+    acc = db.session.get(Account, aid)
     if not acc:
         return jsonify({"code": 1, "msg": "账号不存在"})
 
-    if acc.platform == "qq":
-        return _test_qq_account_login(acc)
-    if acc.platform == "kugou":
-        return _test_kugou_account_login(acc)
-
-    if acc.platform != "netease":
+    if acc.platform not in PLATFORMS:
         return jsonify({
             "code": 1,
             "msg": f"该平台（{PLATFORM_NAMES.get(acc.platform, acc.platform)}）暂不支持登录测试",
         })
 
     try:
-        client = _create_client(cookie=acc.cookie)
-        info = client.get_account_info()
-        if info.get("code") != 200:
+        client = _create_client(cookie=acc.cookie, platform=acc.platform)
+        if acc.platform == "netease":
+            info = client.get_account_info()
+            ok = info.get("code") == 200
+        else:
+            # QQ 调 /user/get_vip_info，酷狗调 /user/detail
+            info = client.get_user_info()
+            ok = bool(info.get("ok"))
+        if not ok:
             return jsonify({"code": 1, "msg": f"Cookie 无效: {info.get('msg', '未知错误')}"})
         # 刷新昵称/会员类型/到期时间
-        _refresh_account_info(acc)
+        hint = _refresh_account_info(acc)
         db.session.commit()
-        vip_text = vip_text_for(acc.platform, acc.vip_type)
-        return jsonify({
-            "code": 0,
-            "msg": f"登录成功: {acc.nickname or '未知'} ({vip_text})",
-            "data": acc.to_dict(monthly_downloaded=_monthly_downloaded(acc.id)),
-        })
-    except Exception as e:
-        return jsonify({"code": 1, "msg": f"连接网易云API服务失败: {e}"})
-
-
-def _test_qq_account_login(acc: Account) -> Response:
-    """QQ音乐账号登录测试（调 /user/get_vip_info 并刷新会员信息）"""
-    try:
-        client = _create_client(cookie=acc.cookie, platform="qq")
-        info = client.get_user_info()
-        if not info.get("ok"):
-            return jsonify({"code": 1, "msg": f"Cookie 无效: {info.get('msg', '未知错误')}"})
-        # 刷新昵称/绿钻等级/到期时间
-        hint = _refresh_qq_account_info(acc)
-        db.session.commit()
-        vip_text = vip_text_for(acc.platform, acc.vip_type)
-        nickname = acc.nickname or "未知"
-        msg = f"登录成功: {nickname} ({vip_text})"
+        msg = f"登录成功: {acc.nickname or '未知'} ({vip_text_for(acc.platform, acc.vip_type)})"
+        if acc.platform == "kugou":
+            # 实测 VIP 下载能力（高音质是否生效），帮用户确认登录凭证是否完整
+            try:
+                cap = client.test_download_capability()
+                if cap.get("msg"):
+                    msg += f"；下载实测: {cap['msg']}"
+            except Exception as e:
+                logger.warning("酷狗下载能力实测失败 (%s): %s", acc.name, e)
         if hint:
             msg += f"；{hint}"
         return jsonify({
@@ -1698,46 +1633,18 @@ def _test_qq_account_login(acc: Account) -> Response:
             "data": acc.to_dict(monthly_downloaded=_monthly_downloaded(acc.id)),
         })
     except Exception as e:
-        return jsonify({"code": 1, "msg": f"连接QQ音乐API服务失败: {e}"})
-
-
-def _test_kugou_account_login(acc: Account) -> Response:
-    """酷狗音乐账号登录测试（调 /user/detail 并刷新会员信息）"""
-    try:
-        client = _create_client(cookie=acc.cookie, platform="kugou")
-        info = client.get_user_info()
-        if not info.get("ok"):
-            return jsonify({"code": 1, "msg": f"Cookie 无效: {info.get('msg', '未知错误')}"})
-        hint = _refresh_kugou_account_info(acc)
-        db.session.commit()
-        vip_text = vip_text_for(acc.platform, acc.vip_type)
-        nickname = acc.nickname or "未知"
-        msg = f"登录成功: {nickname} ({vip_text})"
-        # 实测 VIP 下载能力（高音质是否生效），帮用户确认登录凭证是否完整
-        try:
-            cap = client.test_download_capability()
-            if cap.get("msg"):
-                msg += f"；下载实测: {cap['msg']}"
-        except Exception as e:
-            logger.warning("酷狗下载能力实测失败 (%s): %s", acc.name, e)
-        if hint:
-            msg += f"；{hint}"
-        return jsonify({
-            "code": 0,
-            "msg": msg,
-            "data": acc.to_dict(monthly_downloaded=_monthly_downloaded(acc.id)),
-        })
-    except Exception as e:
-        return jsonify({"code": 1, "msg": f"连接酷狗音乐API服务失败: {e}"})
+        return jsonify({"code": 1,
+                        "msg": f"连接{PLATFORM_NAMES.get(acc.platform, acc.platform)}API服务失败: {e}"})
 
 
 @api_bp.route("/accounts/stats")
 def accounts_stats():
     """所有账号的本月下载统计（总览页账号卡片用）"""
     accounts = Account.query.filter_by(enabled=True).order_by(Account.platform, Account.sort_order, Account.id).all()
+    counts = _monthly_counts(a.id for a in accounts)
     data = []
     for acc in accounts:
-        downloaded = _monthly_downloaded(acc.id)
+        downloaded = counts.get(acc.id, 0)
         data.append({
             "id": acc.id,
             "platform": acc.platform,
@@ -1819,6 +1726,39 @@ def discover_categories():
         return jsonify({"code": 0, "data": fallback})
 
 
+def _song_flags(ids: list[str], platform: str) -> dict:
+    """查本地库得出一批歌曲的已下载/在途/失败标记（搜索结果与行状态刷新共用）
+
+    Returns:
+        downloaded_ids        success 歌曲列表
+        active_ids            在途任务（pending/downloading/paused）歌曲列表
+        failed                {song_id: 失败原因}（仅 failed 记录；在途优先，不算失败）
+        downloaded_qualities  {song_id: 档位}（空档位不入映射，前端省略展示）
+    """
+    if not ids:
+        return {"downloaded_ids": [], "active_ids": [], "failed": {},
+                "downloaded_qualities": {}}
+    with db.session.no_autoflush:
+        rows = db.session.query(Song.id, Song.quality).filter(
+            Song.id.in_(ids), Song.platform == platform, Song.status == "success"
+        ).all()
+        active_ids = [r[0] for r in db.session.query(DownloadTask.song_id).filter(
+            DownloadTask.song_id.in_(ids),
+            DownloadTask.platform == platform,
+            DownloadTask.status.in_(ACTIVE_TASK_STATUSES),
+        ).all()]
+        active = set(active_ids)
+        failed_rows = db.session.query(Song.id, Song.error_msg).filter(
+            Song.id.in_(ids), Song.platform == platform, Song.status == "failed"
+        ).all()
+    return {
+        "downloaded_ids": [r[0] for r in rows],
+        "active_ids": active_ids,
+        "failed": {r[0]: (r[1] or "") for r in failed_rows if r[0] not in active},
+        "downloaded_qualities": {r[0]: r[1] for r in rows if r[1]},
+    }
+
+
 @api_bp.route("/discover/search", methods=["POST"])
 def discover_search():
     """搜索歌曲或专辑（展示用，不下载，不应用排除过滤）
@@ -1873,32 +1813,11 @@ def discover_search():
         return jsonify({"code": 1, "msg": str(e)})
 
     # 标记已下载/进行中/失败（仅歌曲模式需要；song_id 统一 str + platform 维度查询）
-    with db.session.no_autoflush:
-        success_ids = set()
-        active_ids = set()
-        downloaded_qualities = {}
-        failed_map = {}
-        if items:
-            ids = [str(t["id"]) for t in items if t.get("id")]
-            rows = db.session.query(Song.id, Song.quality).filter(
-                Song.id.in_(ids), Song.platform == platform, Song.status == "success"
-            ).all()
-            success_ids = {r[0] for r in rows}
-            # 已下载档位映射（仅 success 记录；Song 主键 (id, platform) 下同 ID 单条，
-            # 前端确认框用其展示"已有文件音质"；空档位不入映射，quality 未知省略展示）
-            downloaded_qualities = {r[0]: r[1] for r in rows if r[1]}
-            pending_rows = db.session.query(DownloadTask.song_id).filter(
-                DownloadTask.song_id.in_(ids),
-                DownloadTask.platform == platform,
-                DownloadTask.status.in_(ACTIVE_TASK_STATUSES),
-            ).all()
-            active_ids = {r[0] for r in pending_rows}
-            # 失败标记（v0.9.0.0）：failed 记录的失败原因直接回填搜索行，
-            # 让"点了下载没反应"类问题在点击处即可见（active 优先于 failed）
-            failed_rows = db.session.query(Song.id, Song.error_msg).filter(
-                Song.id.in_(ids), Song.platform == platform, Song.status == "failed"
-            ).all()
-            failed_map = {r[0]: (r[1] or "") for r in failed_rows}
+    flags = _song_flags([str(t["id"]) for t in items if t.get("id")], platform)
+    success_ids = set(flags["downloaded_ids"])
+    active_ids = set(flags["active_ids"])
+    failed_map = flags["failed"]
+    downloaded_qualities = flags["downloaded_qualities"]
 
     result_items = []
     for t in items:
@@ -1906,7 +1825,7 @@ def discover_search():
         # 统一 str 化后比较：网易云 search_songs 返回 int id，不 str 化会恒 False
         sid_str = str(t.get("id"))
         t2["downloaded"] = sid_str in success_ids or sid_str in active_ids
-        t2["failed"] = sid_str in failed_map and sid_str not in active_ids
+        t2["failed"] = sid_str in failed_map
         t2["fail_msg"] = failed_map.get(sid_str, "")
         result_items.append(t2)
     return jsonify({
@@ -1943,31 +1862,7 @@ def discover_song_flags():
     ids = []
     if isinstance(ids_raw, list):
         ids = [str(i) for i in ids_raw if str(i).strip()][:200]
-    empty = {"downloaded_ids": [], "active_ids": [], "failed": {},
-             "downloaded_qualities": {}}
-    if not ids:
-        return jsonify({"code": 0, "data": empty})
-
-    rows = db.session.query(Song.id, Song.quality).filter(
-        Song.id.in_(ids), Song.platform == platform, Song.status == "success"
-    ).all()
-    out = {
-        "downloaded_ids": [r[0] for r in rows],
-        "downloaded_qualities": {r[0]: r[1] for r in rows if r[1]},
-    }
-    active_rows = db.session.query(DownloadTask.song_id).filter(
-        DownloadTask.song_id.in_(ids),
-        DownloadTask.platform == platform,
-        DownloadTask.status.in_(ACTIVE_TASK_STATUSES),
-    ).all()
-    active_ids = {r[0] for r in active_rows}
-    out["active_ids"] = [r[0] for r in active_rows]
-    # active 优先于 failed（与 discover_search 同语义：在途任务不算失败）
-    failed_rows = db.session.query(Song.id, Song.error_msg).filter(
-        Song.id.in_(ids), Song.platform == platform, Song.status == "failed"
-    ).all()
-    out["failed"] = {r[0]: (r[1] or "") for r in failed_rows if r[0] not in active_ids}
-    return jsonify({"code": 0, "data": out})
+    return jsonify({"code": 0, "data": _song_flags(ids, platform)})
 
 
 @api_bp.route("/discover/search-download", methods=["POST"])
@@ -2287,7 +2182,7 @@ def organize_job_detail(job_id: int):
     clean 任务额外内联 items（逐文件计划与结果，≤1000 条）：
     [{path, keep_path, status, error_msg, trash_dest, finished_at}]
     """
-    job = OrganizerJob.query.get(job_id)
+    job = db.session.get(OrganizerJob, job_id)
     if job is None:
         return jsonify({"code": 1, "msg": "任务不存在"})
     job_data = _organize_job_dict(job)
