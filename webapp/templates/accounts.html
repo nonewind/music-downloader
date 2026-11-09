@@ -48,9 +48,7 @@
         <h4><i class="bi bi-person-gear"></i> 账号管理</h4>
         <div class="acct-headactions">
             {{ ui.btn('导入', 'secondary', size='sm', icon='upload', attrs={'@click': 'pickImportFile()'}) }}
-            {% if current_user.is_admin %}
             {{ ui.btn('导出', 'secondary', size='sm', icon='download', attrs={'@click': 'exportClick()'}) }}
-            {% endif %}
             {{ ui.btn('添加账号', 'primary', icon='plus-circle', attrs={'@click': 'openAdd()'}) }}
             <input type="file" x-ref="importFile" accept=".json" hidden @change="onImportFile($event)">
         </div>

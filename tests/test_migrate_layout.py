@@ -8,12 +8,12 @@ data.needs 为整数；存量旧结构文件（/歌手/歌名）应被计入 nee
 
 import pytest
 
-from models import Song, User, Setting, db
+from models import Song, Setting, db
 
 
 @pytest.fixture
 def admin_client(tmp_path):
-    """带 /api 蓝图的测试 client：内存库 + 已登录 admin（must_change_password=False）。
+    """带 /api 蓝图的测试 client：内存库（v0.9.0.0 起无登录，直接请求）。
 
     output_dir 指向 tmp 空目录（绝对路径），避免测试触碰仓库根真实 downloads/。
     """
@@ -30,18 +30,10 @@ def admin_client(tmp_path):
 
     with app.app_context():
         db.create_all()
-        admin = User(username="admin", is_admin=True, enabled=True)
-        admin.set_password("admin123")
-        admin.must_change_password = False
-        db.session.add(admin)
-        db.session.commit()
-        uid = admin.id
         # 空目录 + 绝对路径：_resolve_output 不再拼接项目根
         Setting.set("output_dir", str(tmp_path))
 
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = uid
     yield client
 
 

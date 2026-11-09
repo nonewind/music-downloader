@@ -37,7 +37,7 @@
 - **部署灵活**：Windows / Linux 源码运行或单文件 exe，飞牛 fnOS 应用中心一键安装（统一网关接入）
 - **音质升级**：已下载歌曲批量升级到当前音质设置，取不到更高音质自动跳过，不覆盖、不浪费额度
 - **音乐整理**：下载目录重复文件识别与安全清理（回收站 / 直接删除可选），扫描与清理均为后台任务，刷新页面不丢进度
-- **Web 管理**：登录保护、下载历史、失败重试、账号 JSON 导入导出
+- **Web 管理**：下载历史、失败重试、账号 JSON 导入导出（v0.9.0.0 起免登录，打开即用）
 
 ## 安装与运行
 
@@ -80,7 +80,7 @@ python -m venv .venv
 
 ## 快速上手
 
-1. **登录**：浏览器打开 `http://localhost:45600`（fnOS 经统一网关打开），默认账号 `admin / admin123`，**首次登录后立即修改密码**
+1. **打开应用**：浏览器打开 `http://localhost:45600`（fnOS 经统一网关打开），无需登录直接使用
 2. **添加账号**：「账号管理」页添加音乐平台账号，粘贴浏览器 Cookie（网易云须含 `MUSIC_U`，QQ 须含 `uin` 或 `musicid`，酷狗须含 `token`），或直接使用扫码登录（三平台均已支持，QQ 同时支持微信扫码）
 3. **添加歌单**：「歌单管理」页选择平台后粘贴歌单链接或 ID，按设置的同步时间自动同步
 4. **下载**：等待定时同步，或在「发现」页搜索/榜单即时下载，进度见「下载」页
@@ -153,20 +153,11 @@ deen-music-downloader.exe --data-dir D:\deen-data       # Windows
 APP_DATA_DIR=/data/deen-music ./deen-music-downloader
 ```
 
-## 默认账号与密码重置
+## 登录说明
 
-首次启动时自动创建管理员账号：`admin / admin123`。
+v0.9.0.0 起移除登录体系：单用户自用工具，打开即用，无账号密码（访问控制
+依赖部署环境，如 fnOS 面板的内网边界）。存量数据库中的 users 表保留不动。
 
-忘记密码时可在服务器命令行执行重置脚本（[reset_password.py](webapp/reset_password.py)）：
-
-```bash
-# 重置 admin 密码为默认值 admin123
-python webapp/reset_password.py
-
-# 重置指定用户密码为指定值（数据库不在默认位置时加 --data-dir，也支持 APP_DATA_DIR 环境变量）
-python webapp/reset_password.py 张三 newpass456
-python webapp/reset_password.py --data-dir /data/deen-music 张三 newpass456
-```
 
 ## 常见问题
 

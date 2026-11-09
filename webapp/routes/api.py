@@ -31,12 +31,12 @@
 - POST   /api/ncm/qr/create       生成网易云扫码登录二维码
 - POST   /api/ncm/qr/check        轮询网易云扫码登录状态（成功含 cookie）
 - POST   /api/accounts/<aid>/test 测试账号登录（netease/qq 平台）
-- POST   /api/organize/scan       触发后台扫描任务，立即返回 job_id（仅管理员）
-- GET    /api/organize/jobs/<id>  查询整理任务进度与结果摘要（仅管理员）
-- GET    /api/organize/state      整理总览：活跃任务/最近扫描/索引统计（仅管理员）
-- GET    /api/organize/files      本地音频文件索引分页列表（仅管理员）
-- GET    /api/organize/duplicates 重复文件分组（基于索引 + 惰性哈希，仅管理员）
-- POST   /api/organize/clean      清理选中的重复文件（回收站/直接删除，仅管理员）
+- POST   /api/organize/scan       触发后台扫描任务，立即返回 job_id
+- GET    /api/organize/jobs/<id>  查询整理任务进度与结果摘要
+- GET    /api/organize/state      整理总览：活跃任务/最近扫描/索引统计
+- GET    /api/organize/files      本地音频文件索引分页列表
+- GET    /api/organize/duplicates 重复文件分组（基于索引 + 惰性哈希）
+- POST   /api/organize/clean      清理选中的重复文件（回收站/直接删除）
 """
 
 import logging
@@ -46,11 +46,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json as _json
 
-from flask import Blueprint, current_app, jsonify, request, Response, session
+from flask import Blueprint, current_app, jsonify, request, Response
 from sqlalchemy import func
 
-from auth import current_user
-from models import Account, Playlist, Setting, Song, DownloadTask, User, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
+from models import Account, Playlist, Setting, Song, DownloadTask, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
 from core.providers.base import MusicProvider
 from core.organizer import FileEntry, group_duplicates
 from organizer_manager import OrganizerBusyError
@@ -70,30 +69,6 @@ from core.providers.qq import bridge as qq_bridge
 
 api_bp = Blueprint("api", __name__)
 logger = logging.getLogger(__name__)
-
-
-# ======================================================================
-# 全局登录态校验：所有 /api/* 请求均需登录
-# ======================================================================
-@api_bp.before_request
-def _api_require_login():
-    """所有 API 请求均需登录，未登录返回 401"""
-    # 放行 OPTIONS 预检请求
-    if request.method == "OPTIONS":
-        return None
-    uid = session.get("uid")
-    if not uid:
-        return jsonify({"code": 401, "msg": "未登录或登录已过期"}), 401
-    user = User.query.get(uid)
-    if not user or not user.enabled:
-        session.clear()
-        return jsonify({"code": 401, "msg": "用户已被禁用或不存在"}), 401
-    # 首登强制改密：默认密码未修改前，其余 API 一律 403
-    # （带 must_change_password 标记，前端 app.js 据此跳改密页而非报"无权限"；
-    # 自助改密走 /change_password 服务端表单，不经 /api/*）
-    if getattr(user, "must_change_password", False):
-        return jsonify({"code": 403, "msg": "请先修改默认密码", "must_change_password": True}), 403
-    return None
 
 
 def _month_start() -> datetime:
@@ -1032,7 +1007,7 @@ def get_settings():
 @api_bp.route("/settings/migrate-layout", methods=["GET", "POST"])
 def settings_migrate_layout():
     """dir_layout 存量迁移：GET 查询待迁移数量（设置页提示条用）；
-    POST 手动执行迁移（仅管理员，移动用户文件须显式确认）
+    POST 手动执行迁移（移动用户文件须显式确认）
 
     把 /歌手/ 下的存量文件搬入 /歌手/专辑/ 目录：只搬位置不改文件名，
     已在新结构的自动跳过（幂等，可重复执行）。POST 要求当前结构为
@@ -1047,9 +1022,6 @@ def settings_migrate_layout():
             return jsonify({"code": 1, "msg": str(e)})
         return jsonify({"code": 0, "data": {"needs": needs}})
 
-    err = _require_admin()
-    if err:
-        return err
     try:
         result = run_dir_layout_migration(current_app._get_current_object())
     except Exception as e:
@@ -1070,6 +1042,7 @@ _NUMERIC_SETTINGS = {
     "default_playlist_limit":   (1, 9999),
     "hourly_limit_per_account": (0, 10000),
     "sync_jitter":              (0, 3600),
+    "qq_keepalive_hours":       (0, 24),
 }
 
 # 音质档位设置项（档位值沿用网易云语义）与合法值域
@@ -1109,15 +1082,12 @@ def _validate_api_url(key: str, value: str) -> str:
 
 @api_bp.route("/settings", methods=["PUT"])
 def save_settings():
-    """保存配置（仅管理员：设置全局生效，任何登录用户修改都会影响所有人）
+    """保存配置（设置全局生效）
 
     请求体：key-value 字典，仅更新提交的字段。
     web_port 修改后需重启服务才生效。
     ncm_api_port 修改需在API服务停止状态下进行。
     """
-    err = _require_admin()
-    if err:
-        return err
     from models import DEFAULT_SETTINGS
     data = _json_body()
     if not isinstance(data, dict):          # 保留原防御（_json_body 已保证 dict，此检查恒真，0 成本）
@@ -1640,10 +1610,7 @@ def import_accounts():
 
 @api_bp.route("/accounts/export")
 def export_accounts():
-    """导出所有账号信息为 JSON 文件（含 cookie，敏感）——仅管理员"""
-    err = _require_admin()
-    if err:
-        return err
+    """导出所有账号信息为 JSON 文件（含 cookie，敏感）"""
     accounts = Account.query.order_by(Account.platform, Account.sort_order, Account.id).all()
     payload = {
         "exported_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1905,16 +1872,18 @@ def discover_search():
         logger.exception("搜索失败: %s", e)
         return jsonify({"code": 1, "msg": str(e)})
 
-    # 标记已下载/进行中（仅歌曲模式需要；song_id 统一 str + platform 维度查询）
+    # 标记已下载/进行中/失败（仅歌曲模式需要；song_id 统一 str + platform 维度查询）
     with db.session.no_autoflush:
-        downloaded_ids = set()
+        success_ids = set()
+        active_ids = set()
         downloaded_qualities = {}
+        failed_map = {}
         if items:
             ids = [str(t["id"]) for t in items if t.get("id")]
             rows = db.session.query(Song.id, Song.quality).filter(
                 Song.id.in_(ids), Song.platform == platform, Song.status == "success"
             ).all()
-            downloaded_ids = {r[0] for r in rows}
+            success_ids = {r[0] for r in rows}
             # 已下载档位映射（仅 success 记录；Song 主键 (id, platform) 下同 ID 单条，
             # 前端确认框用其展示"已有文件音质"；空档位不入映射，quality 未知省略展示）
             downloaded_qualities = {r[0]: r[1] for r in rows if r[1]}
@@ -1923,13 +1892,22 @@ def discover_search():
                 DownloadTask.platform == platform,
                 DownloadTask.status.in_(ACTIVE_TASK_STATUSES),
             ).all()
-            downloaded_ids |= {r[0] for r in pending_rows}
+            active_ids = {r[0] for r in pending_rows}
+            # 失败标记（v0.9.0.0）：failed 记录的失败原因直接回填搜索行，
+            # 让"点了下载没反应"类问题在点击处即可见（active 优先于 failed）
+            failed_rows = db.session.query(Song.id, Song.error_msg).filter(
+                Song.id.in_(ids), Song.platform == platform, Song.status == "failed"
+            ).all()
+            failed_map = {r[0]: (r[1] or "") for r in failed_rows}
 
     result_items = []
     for t in items:
         t2 = dict(t)
         # 统一 str 化后比较：网易云 search_songs 返回 int id，不 str 化会恒 False
-        t2["downloaded"] = str(t.get("id")) in downloaded_ids
+        sid_str = str(t.get("id"))
+        t2["downloaded"] = sid_str in success_ids or sid_str in active_ids
+        t2["failed"] = sid_str in failed_map and sid_str not in active_ids
+        t2["fail_msg"] = failed_map.get(sid_str, "")
         result_items.append(t2)
     return jsonify({
         "code": 0,
@@ -1943,6 +1921,53 @@ def discover_search():
             "downloaded_qualities": downloaded_qualities,
         },
     })
+
+
+@api_bp.route("/discover/song-flags", methods=["POST"])
+def discover_song_flags():
+    """批量刷新歌曲的已下载/进行中/失败标记（仅查本地库，不触发平台搜索）
+
+    发现页在队列活跃→空闲跃迁时调用（app.js 广播 md:queue-idle）：
+    已入队歌曲的行状态由此落到终态，无需重新搜索平台接口。
+
+    请求体：{"platform":"qq", "ids":["001xxx", ...]}（ids 上限 200）
+    返回 data：
+        downloaded_ids   success 歌曲列表
+        active_ids       在途任务（pending/downloading/paused）歌曲列表
+        failed           {song_id: 失败原因}（仅 failed 记录）
+        downloaded_qualities  {song_id: 档位}（确认框文案用）
+    """
+    data = _json_body()
+    platform = _req_platform()
+    ids_raw = data.get("ids")
+    ids = []
+    if isinstance(ids_raw, list):
+        ids = [str(i) for i in ids_raw if str(i).strip()][:200]
+    empty = {"downloaded_ids": [], "active_ids": [], "failed": {},
+             "downloaded_qualities": {}}
+    if not ids:
+        return jsonify({"code": 0, "data": empty})
+
+    rows = db.session.query(Song.id, Song.quality).filter(
+        Song.id.in_(ids), Song.platform == platform, Song.status == "success"
+    ).all()
+    out = {
+        "downloaded_ids": [r[0] for r in rows],
+        "downloaded_qualities": {r[0]: r[1] for r in rows if r[1]},
+    }
+    active_rows = db.session.query(DownloadTask.song_id).filter(
+        DownloadTask.song_id.in_(ids),
+        DownloadTask.platform == platform,
+        DownloadTask.status.in_(ACTIVE_TASK_STATUSES),
+    ).all()
+    active_ids = {r[0] for r in active_rows}
+    out["active_ids"] = [r[0] for r in active_rows]
+    # active 优先于 failed（与 discover_search 同语义：在途任务不算失败）
+    failed_rows = db.session.query(Song.id, Song.error_msg).filter(
+        Song.id.in_(ids), Song.platform == platform, Song.status == "failed"
+    ).all()
+    out["failed"] = {r[0]: (r[1] or "") for r in failed_rows if r[0] not in active_ids}
+    return jsonify({"code": 0, "data": out})
 
 
 @api_bp.route("/discover/search-download", methods=["POST"])
@@ -2114,17 +2139,6 @@ def upgrade_enqueue():
 
 
 # ======================================================================
-# 管理员权限校验（organize / settings / 账号导出等仅管理员接口共用）
-# ======================================================================
-def _require_admin():
-    """校验当前用户是否为管理员，失败返回 (response, status) 元组"""
-    user = current_user()
-    if not user or not user.is_admin:
-        return jsonify({"code": 403, "msg": "仅管理员可访问"}), 403
-    return None
-
-
-# ======================================================================
 # 音乐整理（重复文件扫描 / 回收站清理）
 # ----------------------------------------------------------------------
 # 用户手动触发的独立功能，不与下载流程联动：scan 只读文件，clean 按白名单
@@ -2250,14 +2264,11 @@ def _organize_job_dict(job) -> dict:
 
 @api_bp.route("/organize/scan", methods=["POST"])
 def organize_scan():
-    """触发后台扫描任务（仅管理员，立即返回不等待执行）
+    """触发后台扫描任务（立即返回不等待执行）
 
     响应 data：{"job_id": int, "status": "pending"}
     重复提交（已有 pending/running 整理任务）与下载目录不存在均返回 code:1。
     """
-    err = _require_admin()
-    if err:
-        return err
     if current_app.config.get("ORGANIZER_MANAGER") is None:
         return jsonify({"code": 1, "msg": "整理服务未初始化"})
     try:
@@ -2271,14 +2282,11 @@ def organize_scan():
 
 @api_bp.route("/organize/jobs/<int:job_id>")
 def organize_job_detail(job_id: int):
-    """查询整理任务详情（进度 / result JSON 摘要，仅管理员）
+    """查询整理任务详情（进度 / result JSON 摘要）
 
     clean 任务额外内联 items（逐文件计划与结果，≤1000 条）：
     [{path, keep_path, status, error_msg, trash_dest, finished_at}]
     """
-    err = _require_admin()
-    if err:
-        return err
     job = OrganizerJob.query.get(job_id)
     if job is None:
         return jsonify({"code": 1, "msg": "任务不存在"})
@@ -2302,10 +2310,7 @@ def organize_job_detail(job_id: int):
 
 @api_bp.route("/organize/state")
 def organize_state():
-    """整理总览：活跃任务 / 最近一次扫描与清理（任意终态）/ 索引统计（仅管理员）"""
-    err = _require_admin()
-    if err:
-        return err
+    """整理总览：活跃任务 / 最近一次扫描与清理（任意终态）/ 索引统计"""
     active = OrganizerJob.query.filter(
         OrganizerJob.status.in_(ORGANIZER_JOB_ACTIVE_STATUSES),
     ).order_by(OrganizerJob.id.desc()).first()
@@ -2334,13 +2339,10 @@ def organize_state():
 
 @api_bp.route("/organize/files")
 def organize_files():
-    """本地音频文件索引分页列表（仅管理员）
+    """本地音频文件索引分页列表
 
     query：status（默认 active，all=不过滤）、offset（默认 0）、limit（默认 200，上限 500）
     """
-    err = _require_admin()
-    if err:
-        return err
     out_dir = _resolve_output_dir()
     status = (request.args.get("status") or "active").strip().lower()
     offset = _safe_int(request.args.get("offset"), 0, lo=0)
@@ -2407,7 +2409,7 @@ def _organize_downloads_item(path: str, counts: dict[str, int],
 
 @api_bp.route("/organize/duplicates")
 def organize_duplicates():
-    """重复文件分组（基于索引中的 active 行，仅管理员）
+    """重复文件分组（基于索引中的 active 行）
 
     与扫描共用 group_duplicates（ORG-02 语义）：确定身份组按
     (platform, song_id)，仅有裸 song_id 的进 same_id_candidate 候选组，
@@ -2416,9 +2418,6 @@ def organize_duplicates():
     最大 size 降序）。每组携带 platform/song_id/reason；每个 item 附
     downloads（该路径命中的下载历史计数与最新任务摘要，只读任务表）。
     """
-    err = _require_admin()
-    if err:
-        return err
     out_dir = _resolve_output_dir()
     rows = LocalAudioFile.query.filter_by(status="active").all()
     entries = [
@@ -2467,16 +2466,13 @@ def organize_duplicates():
 
 @api_bp.route("/organize/clean", methods=["POST"])
 def organize_clean():
-    """清理选中的重复音乐文件（仅管理员，ORG-03 后台任务化）
+    """清理选中的重复音乐文件（ORG-03 后台任务化）
 
     请求体：{"delete_paths": [...], "repair": {"<被删路径>": "<保留路径>"}}
     只入队立即返回 job_id；逐文件重验、回收站/直删（设置 organize_direct_delete）
     与 Song 关联修复由 OrganizerManager._execute_clean 执行，逐文件结果经
     /organize/jobs/<id> 的 items 读取，repair/clear 摘要在 job.result。
     """
-    err = _require_admin()
-    if err:
-        return err
     manager = current_app.config.get("ORGANIZER_MANAGER")
     if manager is None:
         return jsonify({"code": 1, "msg": "整理服务未初始化"})

@@ -30,7 +30,7 @@ from core.organizer import (
     extract_song_id,
 )
 
-from models import LocalAudioFile, OrganizerJob, Setting, User, db
+from models import LocalAudioFile, OrganizerJob, Setting, db
 from organizer_manager import OrganizerBusyError, OrganizerManager
 
 
@@ -491,38 +491,14 @@ def test_real_thread_end_to_end(tmp_path):
 # ======================================================================
 @pytest.fixture
 def org_admin_client(webapp_app, tmp_path):
-    """注册 /api 蓝图 + 管理员登录态 + 已配置 ORGANIZER_MANAGER 的 client"""
+    """注册 /api 蓝图 + 已配置 ORGANIZER_MANAGER 的 client（v0.9.0.0 起无登录）"""
     from routes.api import api_bp
 
     (app,) = webapp_app
     app.config["SECRET_KEY"] = "test-secret"
     app.config["ORGANIZER_MANAGER"] = OrganizerManager(app)
     app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="root", is_admin=True, enabled=True)
-    user.set_password("admin123")
-    db.session.add(user)
-    db.session.commit()
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user.id
-    return client
-
-
-@pytest.fixture
-def org_member_client(webapp_app):
-    """普通用户（非管理员）登录态的 client"""
-    from routes.api import api_bp
-
-    (app,) = webapp_app
-    app.config["SECRET_KEY"] = "test-secret"
-    app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="member", is_admin=False, enabled=True)
-    user.set_password("member1")
-    db.session.add(user)
-    db.session.commit()
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user.id
     return client
 
 
@@ -557,12 +533,6 @@ def test_api_scan_missing_dir(org_admin_client, tmp_path):
 
     assert body["code"] == 1
     assert body["msg"] == "下载目录不存在"
-
-
-def test_api_scan_requires_admin(org_member_client, tmp_path):
-    _setup_out_dir(tmp_path)
-    resp = org_member_client.post("/api/organize/scan")
-    assert resp.status_code == 403
 
 
 def test_api_scan_without_manager(org_admin_client):
@@ -648,12 +618,6 @@ def test_api_files(org_admin_client, tmp_path, fake_audio_factory):
     assert len(page["items"]) == 1
     missing = client.get("/api/organize/files?status=missing").get_json()["data"]
     assert missing["total"] == 0
-
-
-def test_api_files_requires_admin(org_member_client, tmp_path):
-    _setup_out_dir(tmp_path)
-    resp = org_member_client.get("/api/organize/files")
-    assert resp.status_code == 403
 
 
 def test_api_duplicates(org_admin_client, tmp_path, fake_audio_factory):

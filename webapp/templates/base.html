@@ -53,11 +53,9 @@
             <a href="{{ url_for('views.history') }}" class="sidebar-item {% if active_page == 'history' %}active{% endif %}">
                 <i class="bi bi-download"></i><span>下载</span>
             </a>
-            {% if current_user and current_user.is_admin %}
             <a href="{{ url_for('views.organize') }}" class="sidebar-item {% if active_page == 'organize' %}active{% endif %}">
                 <i class="bi bi-collection"></i><span>音乐整理</span>
             </a>
-            {% endif %}
             <a href="{{ url_for('views.settings') }}" class="sidebar-item {% if active_page == 'settings' %}active{% endif %}">
                 <i class="bi bi-gear"></i><span>设置</span>
             </a>
@@ -77,28 +75,7 @@
                 <span class="crumb-page">{{ page_titles.get(active_page, '') }}</span>
                 <span class="crumb-sep d-none">/</span><span class="crumb-sub d-none" id="crumbSub"></span>
             </nav>
-            <div class="topbar-right">
-                {% if current_user %}
-                {# 用户菜单：原生 details/summary 换皮 —— 开合零依赖（无 JS 时菜单
-                   常驻 DOM 且可正常打开，退出登录链接可达）；Alpine 仅增强
-                   click-outside 与 ESC 关闭，加载失败时这些增强静默失效 #}
-                <details class="ui-usermenu"
-                         @click.outside="$el.open = false"
-                         @keydown.escape.window="$el.open = false">
-                    <summary class="ui-usermenu-btn" aria-haspopup="menu">
-                        <i class="bi bi-person-circle"></i>
-                        <span>{{ current_user.username }}</span>
-                        {% if current_user.is_admin %}<span class="ui-badge ui-badge-warning">管理员</span>{% endif %}
-                        <i class="bi bi-chevron-down ui-usermenu-caret"></i>
-                    </summary>
-                    <div class="ui-usermenu-menu" role="menu">
-                        <a class="ui-usermenu-item" href="{{ url_for('views.logout') }}" role="menuitem">
-                            <i class="bi bi-box-arrow-right"></i> 退出登录
-                        </a>
-                    </div>
-                </details>
-                {% endif %}
-            </div>
+            <div class="topbar-right"></div>
         </header>
 
         <main class="app-content">

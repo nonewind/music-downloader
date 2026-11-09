@@ -76,35 +76,18 @@ from version import get_version
 __version__ = get_version()
 
 app = Flask(__name__)
-# Session 签名密钥：在数据目录确定后由 _resolve_secret_key() 三级解析
-# （环境变量 > 数据目录持久化文件 > 硬编码兜底告警），见下方 DB_PATH 之后
-app.config["SESSION_COOKIE_NAME"] = "md_session"
 # 版本号入 config（账号导出文件等处经 current_app.config 读取）
 app.config["APP_VERSION"] = __version__
 
 # 飞牛统一网关环境变量（模块级读取一次；未设置表示普通 TCP 模式）
 GATEWAY_SOCKET = os.environ.get("FNNAS_GATEWAY_SOCKET") or None
 GATEWAY_PREFIX = (os.environ.get("FNNAS_GATEWAY_PREFIX") or "").strip().rstrip("/")
-if GATEWAY_PREFIX:
-    # 网关前缀模式的登录 cookie 绑定到前缀路径，避免被同域其他应用读取
-    app.config["SESSION_COOKIE_PATH"] = GATEWAY_PREFIX
 
 
 @app.context_processor
 def inject_version():
     """把版本号注入所有模板上下文，供 {{ version }} 使用"""
     return {"version": __version__}
-
-
-@app.context_processor
-def inject_user_flag():
-    """把 is_admin 注入所有模板上下文，供前端隐藏管理员专属操作（如保存设置）"""
-    from auth import current_user
-    try:
-        user = current_user()
-    except Exception:       # 无请求上下文等场景下渲染模板不该炸
-        user = None
-    return {"is_admin": bool(user and user.is_admin)}
 
 
 @app.context_processor
@@ -132,44 +115,6 @@ elif os.environ.get("APP_DATA_DIR"):
     DB_PATH = Path(os.environ["APP_DATA_DIR"]).expanduser().resolve() / "downloads.db"
 else:
     DB_PATH = _ROOT / "downloads.db"   # 缺省：保持原行为
-
-
-def _resolve_secret_key() -> str:
-    """Session 签名密钥三级解析：环境变量 > 数据目录持久化文件 > 硬编码兜底
-
-    源码公开场景下硬编码密钥可被用于伪造管理员 session cookie，故首启生成
-    随机密钥并持久化到数据目录（与数据库同目录）。仅当文件系统不可写等极端
-    情况才回退硬编码并显式告警（保证 fnOS 只读安装目录场景不拒绝启动——
-    网关模式数据卷可写，正常不会走到兜底）。密钥变更 = 全部 session 失效，
-    用户重新登录即可（属预期）。
-    """
-    env_key = os.environ.get("FLASK_SECRET_KEY")
-    if env_key:
-        return env_key
-    key_file = DB_PATH.parent / "secret_key"
-    fallback = "netease-downloader-secret-key-v060"
-    try:
-        if key_file.exists():
-            val = key_file.read_text(encoding="utf-8").strip()
-            if val:
-                return val
-        import secrets
-        val = secrets.token_hex(32)
-        key_file.parent.mkdir(parents=True, exist_ok=True)
-        # O_CREAT|O_EXCL 原子创建：并发首启只有一个进程写入成功
-        try:
-            fd = os.open(str(key_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(val)
-        except FileExistsError:
-            val = key_file.read_text(encoding="utf-8").strip() or val
-        return val
-    except OSError as e:
-        logger.warning("密钥文件读写失败（目录只读？），回退默认密钥（会话可被伪造，不安全）: %s", e)
-        return fallback
-
-
-app.config["SECRET_KEY"] = _resolve_secret_key()
 
 # 旧库迁移：数据位置被指定、且老库仍在程序目录时，自动搬迁（含 SQLite 附属文件）
 _old_db = _ROOT / "downloads.db"

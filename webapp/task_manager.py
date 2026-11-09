@@ -13,6 +13,7 @@
 """
 
 import logging
+import os
 import queue
 import random
 import re
@@ -32,6 +33,7 @@ from models import (
     RUNNABLE_TASK_STATUSES,
     Account,
     DownloadTask,
+    FileMd5Cache,
     Playlist,
     Setting,
     Song,
@@ -39,9 +41,12 @@ from models import (
     get_api_base_url,
 )
 from core.downloader import DownloadAborted, Downloader, build_filename, sanitize_filename
+from core.audio_fingerprint import audio_fingerprint
 from core.metadata import write_tags
+from core.organizer import AUDIO_EXTS
 from core.providers.base import MusicProvider
 from core.providers.netease import NeteaseProvider
+from core.providers.qq.client import merge_refreshed_cookie
 from core.providers import get_provider
 
 logger = logging.getLogger(__name__)
@@ -97,6 +102,81 @@ def _find_delivered_song(sid: str, platform: str):
         sid, platform, song.file_path,
     )
     return None
+
+
+# ----------------------------------------------------------------------
+# 声音内容去重（v0.9.0.0）
+# ----------------------------------------------------------------------
+def _find_md5_duplicate(path: Path, out_root: Path):
+    """在下载目录内查找与 path "声音部分"完全一致的已有音频文件
+
+    场景：同一首歌被不同专辑/歌单收录为不同 song_id，(id, platform) 去重
+    键拦不住，只能在下载完成后按内容识别。比对范围是整个下载目录而非
+    songs 表——DB 重置、手动放入、音乐整理挪动过的文件也能命中。
+
+    比的是 audio_fingerprint（只算声音部分，见 core/audio_fingerprint）：
+    不同专辑写入的标签/封面不同，整文件 MD5 与文件大小都会不同，因此
+    不能按整文件 MD5 比，也不能按大小预筛。
+
+    成本控制：指纹缓存于 FileMd5Cache（(size, mtime) 不一致即失效重算），
+    FLAC 指纹只读文件头；首次建缓存后常规下载只需目录遍历 + stat。
+    只看 AUDIO_EXTS 扩展名的文件；path 自身不参与比对。
+
+    调用方须在 Flask app context 内（缓存表读写）。返回命中文件 Path，
+    无重复返回 None。顺带清理已消失文件的孤儿缓存行。
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    new_fp = audio_fingerprint(path)
+    if new_fp is None:
+        return None
+
+    cache = {r.path: r for r in db.session.query(FileMd5Cache).all()}
+
+    def _remember(fstr, cst, digest):
+        row = cache.get(fstr)
+        if row is None:
+            row = FileMd5Cache(path=fstr)
+            db.session.add(row)
+            cache[fstr] = row
+        row.size, row.mtime, row.md5 = cst.st_size, cst.st_mtime, digest
+
+    # 本次文件自身也入缓存：它是后续下载完成时的比对候选
+    _remember(str(path), st, new_fp)
+
+    dup = None
+    for dirpath, _dirnames, filenames in os.walk(out_root):
+        for fn in filenames:
+            if Path(fn).suffix.lower() not in AUDIO_EXTS:
+                continue   # 跳过 .part / 歌词 / 封面等非音频文件
+            fp = Path(dirpath) / fn
+            if fp == path:
+                continue
+            fstr = str(fp)
+            try:
+                cst = fp.stat()
+            except OSError:
+                continue
+            row = cache.get(fstr)
+            if row is not None and row.size == cst.st_size and row.mtime == cst.st_mtime:
+                digest = row.md5 or ""
+            else:
+                # 读不出指纹（空文件/损坏）记空串，同样缓存，避免每次重读
+                digest = audio_fingerprint(fp) or ""
+                _remember(fstr, cst, digest)
+            if digest and digest == new_fp:
+                dup = fp
+                break
+        if dup is not None:
+            break
+    # 文件被移动/删除后遗留的孤儿缓存行
+    for fstr, row in list(cache.items()):
+        if not Path(fstr).exists():
+            db.session.delete(row)
+    db.session.commit()
+    return dup
 
 
 def should_block_downgrade(existing_song, actual_level: str) -> tuple[bool, str]:
@@ -647,15 +727,17 @@ class TaskManager:
         logger.info("TaskManager 已停止")
 
     def _refresh_schedule(self) -> None:
-        """根据设置重建定时同步任务（多时间点 cron + 抖动延迟）
+        """根据设置重建定时任务（同步 cron + QQ cookie 保活 cron）
 
         - sync_times: "03:00,09:00,21:00" → 每个时间点一个 cron job
         - sync_jitter: 触发后随机延迟 0~N 秒再执行
+        - qq_keepalive_hours: QQ cookie 保活间隔（小时，0=关闭）
         """
         with self.app.app_context():
             enabled = Setting.get("auto_sync_enabled", "true") == "true"
             times_raw = Setting.get("sync_times", "03:00,09:00,21:00")
             jitter = _setting_int("sync_jitter", 600)
+            keepalive_hours = _setting_int("qq_keepalive_hours", 6)
 
         # 清掉旧的同步任务（旧版单 job id=auto_sync + 新版多 job auto_sync_N）
         try:
@@ -692,6 +774,65 @@ class TaskManager:
             ", ".join(f"{h:02d}:{mi:02d}" for h, mi in time_points),
             jitter,
         )
+
+        # QQ cookie 保活（v0.9.0.0）：每 N 小时整点刷新 musickey（0=关闭）。
+        # 网页 cookie 的 key 名义 60 天但需持续续期（不刷约 1 天失效）；
+        # cron hour="*/N" 复用已注册的 cron trigger，无需新增 hidden import
+        try:
+            self._scheduler.remove_job("cookie_keepalive")
+        except Exception:
+            pass
+        if keepalive_hours >= 1:
+            self._scheduler.add_job(
+                self._qq_cookie_keepalive,
+                "cron",
+                hour=f"*/{min(keepalive_hours, 24)}",
+                minute=0,
+                second=0,
+                id="cookie_keepalive",
+                replace_existing=True,
+            )
+            logger.info("QQ cookie 保活已启用：每 %d 小时刷新一次", keepalive_hours)
+        else:
+            logger.info("QQ cookie 保活已关闭（qq_keepalive_hours=0）")
+
+    def _qq_cookie_keepalive(self) -> None:
+        """QQ 账号 cookie 保活：调桥接服务刷新 musickey 并写回账号
+
+        网页 cookie 的刷新字段（psrf_qqrefresh_token 等）经 QqClient.
+        set_cookie 透传服务端；换发的新 musickey/refresh_token 经
+        merge_refreshed_cookie 合并回原始 Cookie 串后持久化（保留其余
+        登录态相关字段）。刷新失败只记日志——失效会在取流时暴露，
+        届时账号页重新扫码即可；cookie 缺少刷新字段的账号同样在此暴露。
+        """
+        with self.app.app_context():
+            accounts = Account.query.filter_by(platform="qq", enabled=True).order_by(
+                Account.sort_order, Account.id).all()
+            if not accounts:
+                return
+            logger.info("QQ cookie 保活开始，共 %d 个启用账号", len(accounts))
+            for acc in accounts:
+                try:
+                    p = get_provider("qq")
+                    p.set_cookie(acc.cookie or "")
+                    cred = p.refresh_credential()
+                    if cred:
+                        new_cookie = merge_refreshed_cookie(acc.cookie or "", cred)
+                        if new_cookie:
+                            acc.cookie = new_cookie
+                        acc.last_check_at = datetime.now()
+                        db.session.commit()
+                        if new_cookie:
+                            logger.info("QQ cookie 自动续期成功: %s", acc.name)
+                        else:
+                            logger.debug("QQ cookie 保活检查完成（服务端未换发）: %s", acc.name)
+                    else:
+                        logger.warning(
+                            "QQ cookie 自动续期失败: %s（刷新接口无返回——cookie 可能已失效，"
+                            "或缺少 psrf_qqrefresh_token 等刷新字段），请在账号管理页重新扫码",
+                            acc.name)
+                except Exception as e:
+                    logger.warning("QQ cookie 自动续期异常 (%s): %s", acc.name, e)
 
     def _sync_all_playlists_with_jitter(self, jitter: int = 0) -> None:
         """带抖动延迟的同步入口（供 cron 调用）
@@ -1475,6 +1616,7 @@ class TaskManager:
             # 读取配置（音质按平台独立设置；未单独设置时回退旧全局 level 兼容迁移）
             level = Setting.get(f"level_{platform}", "") or Setting.get("level", "exhigh")
             quality_fallback = Setting.get("enable_quality_fallback", "true") == "true"
+            md5_dedup = Setting.get("download_md5_dedup", "true") == "true"
             write_meta = Setting.get("write_metadata", "true") == "true"
             write_lyric = Setting.get("write_lyric", "true") == "true"
             mode = Setting.get("download_mode", "fallback")
@@ -1537,13 +1679,15 @@ class TaskManager:
                 self._download_with_account(task_pk, account, sid, sname, artists, pl_id, pl_name,
                                             level, write_meta, write_lyric, switch_on_fail=False,
                                             prefer_non_vip=prefer_non_vip, fee=fee,
-                                            quality_fallback=quality_fallback)
+                                            quality_fallback=quality_fallback,
+                                            md5_dedup=md5_dedup)
             else:
                 # 接力模式：失败或达额度时切换到下一个账号
                 self._download_with_account(task_pk, account, sid, sname, artists, pl_id, pl_name,
                                             level, write_meta, write_lyric, switch_on_fail=True,
                                             prefer_non_vip=prefer_non_vip, fee=fee,
-                                            quality_fallback=quality_fallback)
+                                            quality_fallback=quality_fallback,
+                                            md5_dedup=md5_dedup)
         finally:
             # 本次传输已结束：清掉残留的中止登记，避免注册表随任务数增长。
             # 各中止分支内已用 _consume_abort 消费过一次，此处重复清理安全
@@ -1640,6 +1784,7 @@ class TaskManager:
         fee: int = 0,
         tried: set[int] | None = None,
         quality_fallback: bool = True,
+        md5_dedup: bool = True,
         abort_check=None,
     ) -> None:
         """用指定账号下载一首歌
@@ -1650,6 +1795,7 @@ class TaskManager:
             fee: 歌曲费用类型（1=VIP歌曲）
             tried: 本次接力链路已尝试的账号 ID 集合（递归透传，防止无限切换）
             quality_fallback: 目标档取不到流时是否沿音质链向低档回退
+            md5_dedup: 下载完成后是否做 MD5 内容去重（回退与库内重复的文件）
             abort_check: 用户中止检查回调（暂停/删除任务）；递归换号时透传同一个，
                 保证始终针对同一任务判断。为 None 时按 task_pk 自行构造
         """
@@ -1707,6 +1853,7 @@ class TaskManager:
                                                 level, write_meta, write_lyric, switch_on_fail=True,
                                                 prefer_non_vip=prefer_non_vip, fee=fee, tried=tried,
                                                 quality_fallback=quality_fallback,
+                                                md5_dedup=md5_dedup,
                                                 abort_check=abort_check)
                     return
             self._mark_failed(task_pk, sid, sname, artists, pl_id, pl_name,
@@ -1746,6 +1893,7 @@ class TaskManager:
                                                 level, write_meta, write_lyric, switch_on_fail=True,
                                                 prefer_non_vip=prefer_non_vip, fee=fee, tried=tried,
                                                 quality_fallback=quality_fallback,
+                                                md5_dedup=md5_dedup,
                                                 abort_check=abort_check)
                     return
             why = f"{why}（已尝试 {len(tried)} 个账号）"
@@ -1901,6 +2049,7 @@ class TaskManager:
                                                 level, write_meta, write_lyric, switch_on_fail=True,
                                                 prefer_non_vip=prefer_non_vip, fee=fee, tried=tried,
                                                 quality_fallback=quality_fallback,
+                                                md5_dedup=md5_dedup,
                                                 abort_check=abort_check)
                     return
             self._mark_failed(task_pk, sid, sname, artists, pl_id, pl_name,
@@ -1948,6 +2097,75 @@ class TaskManager:
                 self._consume_abort(task_pk, path if produced else None,
                                     default_reason="delete" if gone else "pause")
                 return
+
+            # 声音内容去重（v0.9.0.0）：声音部分与库内已有文件完全一致时回退本次下载。
+            # 仅对 produced=True（本次真实写盘）生效——produced=False 是命中
+            # 已存在文件提前返回，它本身就是库内文件，无需再查。
+            # 回退动作：删新文件 → 清理本次新建的空目录（专辑/歌手层，逐层
+            # 尝试 rmdir，非空自然保留）→ 任务终态 skipped（与音质保护 skip
+            # 同款历史呈现，原因文案带命中对象）→ 本次 Song 记录指向库内已有
+            # 文件（否则无 success 记录会让下次歌单同步再次下载同一首，
+            # 形成"下载→回退→再下载"的额度浪费循环）
+            if produced and md5_dedup:
+                dup = _find_md5_duplicate(path, Path(downloader.output_dir))
+                if dup is not None:
+                    cur = DownloadTask.query.get(task_pk)
+                    if cur is not None and cur.status == "paused":
+                        # 与保护性跳过同款守卫：暂停恰好落在判定与写库之间时
+                        # 以 paused 为准（paused 可继续，skipped 是终态）；
+                        # 文件留给暂停→继续流程接管
+                        return
+                    matched = Song.query.filter_by(
+                        file_path=str(dup), status="success").first()
+                    try:
+                        path.unlink()
+                    except OSError as e:
+                        logger.warning("MD5 去重回退：删除本次文件失败 %s: %s", path, e)
+                    root = Path(downloader.output_dir).resolve()
+                    parent = path.parent
+                    for _ in range(2):   # artist_album 两层（专辑+歌手）；artist 布局第二层即根
+                        try:
+                            if parent == root or root not in parent.resolve().parents:
+                                break
+                            parent.rmdir()   # 目录非空抛 OSError，保留
+                        except OSError:
+                            break
+                        parent = parent.parent
+                    hit_label = (
+                        f"《{matched.name} - {matched.artists}》[{matched.platform}]"
+                        if matched else f"库内文件 {dup.name}"
+                    )
+                    why = (f"声音内容与库内重复（MD5 一致）：命中{hit_label}，"
+                           "本次下载已回退，复用库内文件")
+                    Song.query.filter_by(id=sid, platform=account.platform,
+                                         status="failed").delete()
+                    db.session.merge(Song(
+                        id=sid,
+                        platform=account.platform,
+                        name=sname,
+                        artists=artists or "",
+                        album=album_name or "",
+                        duration_ms=duration_ms or 0,
+                        quality=(matched.quality if matched else actual_level) or actual_level,
+                        file_path=str(dup),
+                        file_size=dup.stat().st_size if dup.exists() else 0,
+                        playlist_id=pl_id,
+                        source_name=pl_name or "",
+                        status="success",
+                        account_id=account.id,
+                    ))
+                    task = DownloadTask.query.get(task_pk)
+                    if task is not None:
+                        task.status = "skipped"
+                        task.progress = 100
+                        task.account_id = account.id
+                        task.error_msg = why
+                        if task.song_name != sname:
+                            task.song_name = sname
+                    db.session.commit()
+                    logger.info("MD5 去重命中，已回退本次下载: %s - %s，命中 %s（任务 pk=%s → skipped）",
+                                artists, sname, dup, task_pk)
+                    return
 
             Song.query.filter_by(id=sid, platform=account.platform, status="failed").delete()
             song = Song(

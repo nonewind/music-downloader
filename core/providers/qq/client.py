@@ -201,10 +201,16 @@ class QqClient:
             微信登录： wxuin                 -> musicid（纯数字虚拟 uin，兜底）
             qqmusic_key/qm_keyst             -> musickey
         其余可识别字段（openid/refresh_token/access_token/unionid/
-        refresh_key 等）按名透传，利于服务端凭证续期；微信登录 Cookie 用
-        wx 前缀字段（wxopenid/wxunionid/wxrefresh_token），标准名缺失时
-        映射为标准名透传——W_X_ 凭证续期需要 openid/unionid/refresh_token
-        （qqmusic_api login.refresh_credential login_type=1 分支）。
+        refresh_key/expired_at）按名透传，利于服务端凭证续期。网页 Cookie
+        无标准名时的别名映射：
+            微信：wxopenid/wxunionid/wxrefresh_token（W_X_ 凭证续期需要
+                openid/unionid/refresh_token，qqmusic_api login.
+                refresh_credential login_type=1 分支）
+            QQ：psrf_qqopenid/psrf_qqrefresh_token/psrf_qqaccess_token/
+                psrf_qqunionid/psrf_access_token_expiresAt（QQ 网页登录
+                Cookie 的刷新凭证字段；refresh_credential login_type=2
+                分支需要 access_token/refresh_token/expired_at——缺了它们
+                60 天 musickey 无法续期，约 1 天即失效）
         """
         self.session.cookies.clear()
         pairs = {}
@@ -233,8 +239,16 @@ class QqClient:
         if musickey:
             self.session.cookies.set("musickey", musickey)
         wx_aliases = {"openid": "wxopenid", "unionid": "wxunionid", "refresh_token": "wxrefresh_token"}
+        qq_aliases = {
+            "openid": "psrf_qqopenid",
+            "refresh_token": "psrf_qqrefresh_token",
+            "access_token": "psrf_qqaccess_token",
+            "unionid": "psrf_qqunionid",
+            "expired_at": "psrf_access_token_expiresAt",
+        }
         for name in ("openid", "refresh_token", "access_token", "unionid", "refresh_key", "expired_at"):
-            value = pairs.get(name) or pairs.get(wx_aliases.get(name, ""))
+            value = pairs.get(name) or pairs.get(wx_aliases.get(name, "")) \
+                or pairs.get(qq_aliases.get(name, ""))
             if value:
                 self.session.cookies.set(name, value)
         # 加密 uin：QQ/微信登录 Cookie 均自带，经 /user/{euin}/homepage 取昵称
@@ -542,6 +556,20 @@ class QqClient:
             return {"ok": False, "status": 4, "cookie": "",
                     "msg": "授权成功但凭证缺少 musicid/musickey，请重试"}
         return {"ok": True, "status": 4, "cookie": cookie, "msg": ""}
+
+    def refresh_credential(self) -> dict:
+        """刷新登录凭证（GET /login/refresh_credential，QQ musickey 续期）
+
+        QQ 网页 cookie 的 musickey（qm_keyst，Q_H_L_ 前缀）名义有效期
+        60 天，但需定期调用刷新接口续期，否则约 1 天即失效。刷新依赖
+        set_cookie 已透传的刷新字段（psrf_qqrefresh_token/psrf_qqaccess_
+        token 等），换发成功返回新 Credential（新 musickey 等）。
+
+        Returns:
+            凭证 dict（musickey/refresh_token/access_token/expired_at/...）；
+            请求失败/业务失败/凭证无效时返回 {}（_request 归一行为）。
+        """
+        return self._request("/login/refresh_credential")
 
     # ------------------------------------------------------------------
     # 搜索
@@ -1052,6 +1080,83 @@ def _credential_to_cookie(credential: dict) -> str:
     if euin:
         parts.append(f"euin={euin}")
     return ";".join(parts)
+
+
+def merge_refreshed_cookie(old_cookie: str, cred: dict) -> str | None:
+    """把 refresh_credential 返回的新凭证合并回网页 Cookie 串
+
+    保活链路（TaskManager cookie_keepalive 定时任务）专用：调桥接服务
+    GET /login/refresh_credential 换发新 musickey 后，把新值写回账号存储
+    的原始网页 Cookie 对应字段（保持原 Cookie 其余字段不动——部分字段如
+    ptcz/wxunionid 与登录态相关，不能丢）：
+        musickey -> qqmusic_key + qm_keyst + psrf_musickey_createtime 附带
+            musickeyCreateTime 时一并更新
+        refresh_token -> psrf_qqrefresh_token + wxrefresh_token（微信共存）
+        access_token  -> psrf_qqaccess_token
+        expired_at    -> psrf_access_token_expiresAt
+
+    Returns:
+        合并后的新 Cookie 串；无有效新值（缺 musickey）或与原值完全一致
+        （服务端未换发）时返回 None，调用方无需写库。
+    """
+    if not isinstance(cred, dict):
+        return None
+
+    def pick(*names):
+        for n in names:
+            v = cred.get(n)
+            if v not in (None, "", 0):
+                return str(v)
+        return ""
+
+    new_key = pick("musickey")
+    if not new_key:
+        return None
+    pairs = {}
+    for part in (old_cookie or "").split(";"):
+        if "=" in part:
+            k, _, v = part.strip().partition("=")
+            if k:
+                pairs[k.strip()] = v
+
+    changed = False
+
+    def put(name: str, value: str, only_if_exists: bool = False) -> None:
+        """写字段；only_if_exists=True 时仅原 Cookie 已有该字段才更新
+        （不给 QQ cookie 添加微信字段之类的无意义新增，避免"未换发也判变"）"""
+        nonlocal changed
+        if not value:
+            return
+        if only_if_exists and name not in pairs:
+            return
+        if pairs.get(name) != value:
+            pairs[name] = value
+            changed = True
+
+    # musickey 载体（网页/扫码两种 Cookie 形态都写，set_cookie 均可解析）
+    put("qqmusic_key", new_key)
+    put("qm_keyst", new_key)
+    # 刷新字段：优先更新网页 Cookie 的 psrf_*；字段不存在则落标准名
+    # （set_cookie 与桥接服务都认标准名）；wxrefresh_token 仅微信 Cookie
+    # 原有该字段时同步
+    refresh_token = pick("refresh_token")
+    put("psrf_qqrefresh_token", refresh_token)
+    put("wxrefresh_token", refresh_token, only_if_exists=True)
+    if "psrf_qqrefresh_token" not in pairs:
+        put("refresh_token", refresh_token)
+    access_token = pick("access_token")
+    put("psrf_qqaccess_token", access_token)
+    if "psrf_qqaccess_token" not in pairs:
+        put("access_token", access_token)
+    expired_at = pick("expired_at")
+    put("psrf_access_token_expiresAt", expired_at)
+    if "psrf_access_token_expiresAt" not in pairs:
+        put("expired_at", expired_at)
+    create_time = pick("musickeyCreateTime", "musickey_create_time")
+    put("psrf_musickey_createtime", create_time)
+    if not changed:
+        return None
+    return "; ".join(f"{k}={v}" for k, v in pairs.items() if v)
 
 
 # identity 块中 各档会员标志位 -> 到期时间字段（get_vip_info 返回结构）

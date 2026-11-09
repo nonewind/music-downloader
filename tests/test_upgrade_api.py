@@ -15,7 +15,7 @@ import pytest
 
 import task_manager
 from core.providers import get_provider
-from models import DownloadTask, LocalAudioFile, Setting, Song, User, db
+from models import DownloadTask, LocalAudioFile, Setting, Song, db
 
 
 def _set(key, value):
@@ -161,13 +161,7 @@ def client(webapp_app):
     app.config["SECRET_KEY"] = "test-secret"
     app.config["TASK_MANAGER"] = TaskManager(app)  # 构造不启动线程/调度器
     app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="root", is_admin=True, enabled=True)
-    user.set_password("admin123")
-    db.session.add(user)
-    db.session.commit()
     c = app.test_client()
-    with c.session_transaction() as sess:
-        sess["uid"] = user.id
     return c
 
 

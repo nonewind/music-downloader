@@ -327,43 +327,16 @@ def test_file_sha1_streaming(tmp_path):
 
 
 # ======================================================================
-# 端点测试基建：测试专用 app 上注册 api 蓝图 + 管理员登录态
+# 端点测试基建：测试专用 app 上注册 api 蓝图（v0.9.0.0 起无登录）
 # ======================================================================
 @pytest.fixture
 def admin_client(webapp_app):
-    """注册 api 蓝图并注入管理员登录态的 test client"""
-    from models import User, db
+    """注册 api 蓝图的 test client"""
     from routes.api import api_bp
 
     (app,) = webapp_app
-    app.config["SECRET_KEY"] = "test-secret"    # 裸 app 无 secret_key，session 打不开
     app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="root", is_admin=True, enabled=True)
-    user.set_password("admin123")
-    db.session.add(user)
-    db.session.commit()
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user.id
-    return client
-
-
-@pytest.fixture
-def member_client(webapp_app):
-    """注册 api 蓝图并注入普通用户（非管理员）登录态的 test client"""
-    from models import User, db
-    from routes.api import api_bp
-
-    (app,) = webapp_app
-    app.config["SECRET_KEY"] = "test-secret"
-    app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="member", is_admin=False, enabled=True)
-    user.set_password("member1")
-    db.session.add(user)
-    db.session.commit()
-    client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user.id
     return client
 
 
@@ -444,12 +417,6 @@ def test_scan_endpoint_missing_dir(admin_client, tmp_path):
     assert resp.status_code == 200
     assert body["code"] == 1
     assert body["msg"] == "下载目录不存在"
-
-
-def test_scan_endpoint_requires_admin(member_client, tmp_path):
-    _setup_out_dir(tmp_path)
-    resp = member_client.post("/api/organize/scan")
-    assert resp.status_code == 403
 
 
 # 防止未使用导入告警（DuplicateGroup/FileEntry 是导出契约的一部分）

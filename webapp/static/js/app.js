@@ -42,7 +42,8 @@ function showToast(msg, title = "提示", kind = "info") {
     setTimeout(dismiss, 3000);
 }
 
-// API 请求封装（默认 15 秒超时，401 自动跳转登录；options.timeout 可覆盖）
+// API 请求封装（默认 15 秒超时；options.timeout 可覆盖。
+// v0.9.0.0 移除登录体系：401/403 不再做登录/改密跳转，统一按错误抛出）
 async function api(url, options = {}) {
     // 统一网关模式拼接前缀（window.APP_BASE 由 base.html 注入；普通模式为空串）
     const base = window.APP_BASE || "";
@@ -56,22 +57,6 @@ async function api(url, options = {}) {
             ...options,
             signal: controller.signal,
         });
-        // 401 未登录：跳转登录页
-        if (resp.status === 401) {
-            window.location.href = base + "/login";
-            return new Promise(() => {});  // 永不 resolve，避免后续逻辑报错
-        }
-        // 403 无权限：先识别"首登强制改密"拦截（后端带 must_change_password
-        // 标记），跳改密页；其余按普通无权限抛错
-        if (resp.status === 403) {
-            let body403 = {};
-            try { body403 = await resp.json(); } catch (_) {}
-            if (body403.must_change_password) {
-                window.location.href = base + "/change_password";
-                return new Promise(() => {});  // 跳转后不 resolve，避免后续逻辑报错
-            }
-            throw new Error(body403.msg || "无权限执行此操作");
-        }
         // 非 2xx：后端异常页（如 HTML 500）在此拦截。
         // 否则 resp.json() 抛 SyntaxError 掩盖真实原因；且若 5xx 恰好返回
         // {"code":0,...} 形状的 body 还会被误判为成功
@@ -81,11 +66,6 @@ async function api(url, options = {}) {
             throw new Error(detail || `服务异常 (HTTP ${resp.status})`);
         }
         const data = await resp.json();
-        // 业务层 401 也跳转登录（兼容后端返回 200+code:401 的情况）
-        if (data.code === 401) {
-            window.location.href = base + "/login";
-            return new Promise(() => {});
-        }
         if (data.code !== 0) {
             throw new Error(data.msg || "请求失败");
         }
@@ -179,10 +159,19 @@ function renderStatusbar(tasks, pausedAll) {
     const nDownloading = tasks.filter(t => t.status === "downloading").length;
     const nPending = tasks.filter(t => t.status === "pending").length;
     const nPaused = tasks.filter(t => t.status === "paused").length;
+    const hasActive = nDownloading + nPending + nPaused > 0;
+
+    // 活跃→空闲跃迁广播（含「已全部暂停」→非暂停态）：
+    // 发现页监听后刷新搜索行状态，让"已入队"的行尽快落到终态
+    // （成功=已下载 / 失败=未下载+失败徽标），失败原因不再只藏在历史页
+    if (renderStatusbar._prevHasActive && !hasActive && !pausedAll) {
+        window.dispatchEvent(new CustomEvent("md:queue-idle"));
+    }
+    renderStatusbar._prevHasActive = hasActive || pausedAll;
 
     if (pausedAll) {
         summary.innerHTML = '<i class="bi bi-pause-circle"></i> 已全部暂停';
-    } else if (nDownloading + nPending + nPaused > 0) {
+    } else if (hasActive) {
         const segs = [];
         if (nDownloading) segs.push("下载中 " + nDownloading);
         if (nPending) segs.push("排队 " + nPending);

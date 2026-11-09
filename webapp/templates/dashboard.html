@@ -186,11 +186,9 @@
                     <a class="dash-shortcut" href="{{ url_for('views.history') }}">
                         <i class="bi bi-download"></i><span>下载</span>
                     </a>
-                    {% if current_user and current_user.is_admin %}
                     <a class="dash-shortcut" href="{{ url_for('views.organize') }}">
                         <i class="bi bi-collection"></i><span>音乐整理</span>
                     </a>
-                    {% endif %}
                 </div>
             </div>
         </div>

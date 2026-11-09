@@ -43,7 +43,8 @@
     .disc-formhint { margin: -6px 0 12px; font-size: 12px; color: var(--ui-text-3); }
 </style>
 
-<div x-data="discoverPage()" x-cloak>
+<div x-data="discoverPage()" x-cloak
+     @md:queue-idle.window="_onQueueIdle()">
     <!-- 页头：标题 + 平台分段控件（pill 风格）+ 添加歌单 -->
     <div class="disc-pagehead">
         <h4><i class="bi bi-compass"></i> 发现</h4>
@@ -131,9 +132,11 @@
                                     <span class="ui-badge ui-badge-success" x-show="s.fee !== 1">免费</span>
                                 </td>
                                 <td>
-                                    <span class="ui-badge ui-badge-info" x-show="s.downloading">下载中</span>
-                                    <span class="ui-badge ui-badge-muted" x-show="s.downloaded && !s.downloading">已下载</span>
-                                    <span class="ui-badge ui-badge-muted" x-show="!s.downloaded && !s.downloading">未下载</span>
+                                    <span class="ui-badge ui-badge-info" x-show="s.downloading || s.queued">下载中</span>
+                                    <span class="ui-badge ui-badge-danger" x-show="s.failed && !s.downloading && !s.queued"
+                                          :title="s.fail_msg || '下载失败，可点击右侧按钮重试'">失败</span>
+                                    <span class="ui-badge ui-badge-success" x-show="s.downloaded && !s.downloading && !s.queued && !s.failed">已下载</span>
+                                    <span class="ui-badge ui-badge-muted" x-show="!s.downloaded && !s.downloading && !s.queued && !s.failed">未下载</span>
                                 </td>
                                 <td>
                                     <button type="button" class="ui-btn ui-btn-sm"

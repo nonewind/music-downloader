@@ -8,8 +8,7 @@
 //   GET    /api/settings                  全量配置（~34 项字符串键值；level_<p> 为空时
 //                                         后端已回填旧全局 level；exclude_scope 兼容旧值
 //                                         "both" = 歌单同步+搜索下载）
-//   PUT    /api/settings                  全量提交（对齐现状：34 键全集，非增量；仅管理员
-//                                         ——window.IS_ADMIN 前端禁用保存，后端二次校验；
+//   PUT    /api/settings                  全量提交（对齐现状：键全集非增量；
 //                                         端口钳制/档位重置/重启提示由后端拼进 msg 经 toast 透传）
 //   GET    /api/settings/migrate-layout   {needs} 目录结构待迁移数量（needs>0 显示提示条）
 //   POST   /api/settings/migrate-layout   执行迁移（移动用户文件 → uiConfirm 显式确认；
@@ -69,8 +68,6 @@ function settingsPage() {
         services: { ncm: blankSvcState(), qq: blankSvcState(), kugou: blankSvcState() },
         _pollTimer: null,         // 三服务状态轮询（组件内唯一 timer）
 
-        // 保存按钮可用性：window.IS_ADMIN 由模板注入（后端 PUT 另有二次校验）
-        get isAdmin() { return window.IS_ADMIN === true; },
 
         // 有未保存更改（回填未完成时不提示；保存成功后随快照更新自动消失）
         get isDirty() {
@@ -164,6 +161,7 @@ function settingsPage() {
                 write_lyric: s.write_lyric === "true",
                 filename_include_album: s.filename_include_album !== "false",
                 overwrite_existing: s.overwrite_existing === "true",
+                download_md5_dedup: s.download_md5_dedup !== "false",
                 max_retries: s.max_retries || "3",
                 default_playlist_limit: s.default_playlist_limit || "50",
                 exclude_keywords: s.exclude_keywords || "",
@@ -181,6 +179,7 @@ function settingsPage() {
                 download_mode: s.download_mode || "fallback",
                 prefer_non_vip: s.prefer_non_vip === "true",
                 hourly_limit_per_account: s.hourly_limit_per_account || "50",
+                qq_keepalive_hours: s.qq_keepalive_hours || "6",
                 // 自动同步
                 auto_sync_enabled: s.auto_sync_enabled === "true",
                 sync_times: s.sync_times || "03:00,09:00,21:00",
@@ -188,7 +187,7 @@ function settingsPage() {
             };
         },
 
-        // 表单 → 全量 payload（34 键 = 后端 DEFAULT_SETTINGS 全集，非增量）。
+        // 表单 → 全量 payload（键全集 = 后端 DEFAULT_SETTINGS，非增量）。
         // 布尔统一 "true"/"false" 字符串；自定义 URL 未勾选时提交空串（与旧页一致）
         buildPayload() {
             const f = this.form;
@@ -216,6 +215,7 @@ function settingsPage() {
                 write_lyric: flag(f.write_lyric),
                 filename_include_album: flag(f.filename_include_album),
                 overwrite_existing: flag(f.overwrite_existing),
+                download_md5_dedup: flag(f.download_md5_dedup),
                 max_retries: txt(f.max_retries),
                 default_playlist_limit: txt(f.default_playlist_limit),
                 exclude_keywords: txt(f.exclude_keywords),
@@ -229,6 +229,7 @@ function settingsPage() {
                 download_mode: f.download_mode,
                 prefer_non_vip: flag(f.prefer_non_vip),
                 hourly_limit_per_account: txt(f.hourly_limit_per_account),
+                qq_keepalive_hours: txt(f.qq_keepalive_hours),
                 auto_sync_enabled: flag(f.auto_sync_enabled),
                 sync_times: txt(f.sync_times),
                 sync_jitter: txt(f.sync_jitter),

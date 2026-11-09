@@ -54,6 +54,38 @@ function discoverPage() {
         searchLoading: false,
         allBusy: false,
 
+        // 队列活跃→空闲跃迁（app.js renderStatusbar 广播）：仅查本地库刷新
+        // 当前页行状态（不重调平台搜索），让已入队歌曲尽快落到终态
+        // （已下载 / 失败+原因徽标），失败原因不再只藏在下载历史页
+        async _onQueueIdle() {
+            const s = this.search;
+            if (!s.searched || !s.items.length || this.searchLoading) return;
+            try {
+                const data = await api("/api/discover/song-flags", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        platform: this.platform,
+                        ids: s.items.map(i => String(i.id)),
+                    }),
+                });
+                const d = data.data || {};
+                const dl = new Set(d.downloaded_ids || []);
+                const act = new Set(d.active_ids || []);
+                const failed = d.failed || {};
+                s.qualities = Object.assign({}, s.qualities, d.downloaded_qualities || {});
+                for (const it of s.items) {
+                    const sid = String(it.id);
+                    it.queued = act.has(sid);
+                    it.downloading = act.has(sid);   // 与点击后的本地标记同语义
+                    it.downloaded = dl.has(sid) || act.has(sid);
+                    it.failed = Boolean(failed[sid]) && !act.has(sid);
+                    it.fail_msg = failed[sid] || "";
+                }
+            } catch (_) {
+                // 静默：行状态刷新属辅助信息，失败不打断页面
+            }
+        },
+
         // ---- 我的歌单 ID（发现卡片「已添加」标记） ----
         myPlaylistIds: new Set(),
 
@@ -311,6 +343,11 @@ function discoverPage() {
                 showToast(data.msg, "下载");
                 s.downloaded = true;
                 s.downloading = true;
+                // 快速失败兜底：状态栏 2s 轮询可能整段错过短命任务
+                // （入队后秒失败，队列从未在采样点呈活跃态），延迟单次
+                // 刷新让失败徽标/终态尽快可见；长任务由 md:queue-idle
+                // 跃迁（app.js renderStatusbar 广播）覆盖
+                setTimeout(() => this._onQueueIdle(), 2500);
             } catch (e) {
                 showToast(e.message, "错误");
             } finally {

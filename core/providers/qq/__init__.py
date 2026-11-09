@@ -133,3 +133,7 @@ class QqProvider(MusicProvider):
     def check_qr_login(self, *args, **kwargs):
         """轮询扫码登录状态（旁路代理）"""
         return self._ensure_client().check_qr_login(*args, **kwargs)
+
+    def refresh_credential(self, *args, **kwargs):
+        """刷新登录凭证（musickey 续期，旁路代理；cookie 保活任务用）"""
+        return self._ensure_client().refresh_credential(*args, **kwargs)

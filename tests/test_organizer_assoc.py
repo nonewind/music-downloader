@@ -50,7 +50,6 @@ from models import (
     LocalAudioFile,
     Song,
     Setting,
-    User,
     db,
 )
 from organizer_manager import OrganizerManager
@@ -106,13 +105,7 @@ def admin_client(webapp_app):
     app.config["SECRET_KEY"] = "test-secret"
     app.config["ORGANIZER_MANAGER"] = OrganizerManager(app)
     app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="root", is_admin=True, enabled=True)
-    user.set_password("admin123")
-    db.session.add(user)
-    db.session.commit()
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user.id
     return client
 
 

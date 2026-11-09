@@ -16,7 +16,6 @@ from pathlib import Path
 from sqlalchemy import event, inspect, text
 from sqlalchemy.engine import Engine
 from flask_sqlalchemy import SQLAlchemy
-from werkzeug.security import generate_password_hash, check_password_hash
 
 db = SQLAlchemy()
 
@@ -340,40 +339,20 @@ class LocalAudioFile(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 
-class User(db.Model):
-    """系统用户（Web 登录用）
+class FileMd5Cache(db.Model):
+    """音频声音指纹缓存（下载完成内容去重用，v0.9.0.0）
 
-    初始账号：admin / admin123
-    is_admin: True=管理员（可管理用户），False=普通用户（仅可改自己密码）
+    键为文件绝对路径，(size, mtime) 是失效键：两者与磁盘现状一致才信任
+    md5 列，否则视为过期需重算回写。md5 列存 core.audio_fingerprint 的
+    结果（带格式前缀，如 "flac:<32位hex>"；读不出指纹的文件存空串）。覆盖下载目录全部文件（不限 songs 表登记
+    的），DB 重置后文件仍在的场景也能命中重复。
     """
-    __tablename__ = "users"
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    username = db.Column(db.String(50), unique=True, nullable=False)
-    password_hash = db.Column(db.String(255), nullable=False)
-    is_admin = db.Column(db.Boolean, default=True)
-    enabled = db.Column(db.Boolean, default=True)
-    created_at = db.Column(db.DateTime, default=datetime.now)
-    last_login_at = db.Column(db.DateTime)
-    # 首登强制改密：仅 init_db 新建初始 admin 时置 True；改密/管理员重置
-    # 后置 False。存量账号（旧库升级）默认 False，不会被强制。
-    must_change_password = db.Column(db.Boolean, default=False, nullable=False)
-
-    def set_password(self, raw: str) -> None:
-        self.password_hash = generate_password_hash(raw)
-
-    def check_password(self, raw: str) -> bool:
-        return check_password_hash(self.password_hash, raw)
-
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "username": self.username,
-            "is_admin": self.is_admin,
-            "enabled": self.enabled,
-            "must_change_password": bool(self.must_change_password),
-            "created_at": self.created_at.strftime("%Y-%m-%d %H:%M:%S") if self.created_at else None,
-            "last_login_at": self.last_login_at.strftime("%Y-%m-%d %H:%M:%S") if self.last_login_at else None,
-        }
+    __tablename__ = "file_md5_cache"
+    path = db.Column(db.String(500), primary_key=True)
+    size = db.Column(db.Integer, nullable=False, default=0)
+    mtime = db.Column(db.Float, nullable=False, default=0.0)
+    md5 = db.Column(db.String(64), nullable=False, default="")
+    updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 # 默认配置项
@@ -403,6 +382,10 @@ DEFAULT_SETTINGS = {
     "filename_include_album": "true",
     # 同名文件已存在时覆盖重新下载（关闭时跳过下载并按成功处理）
     "overwrite_existing": "false",
+    # 下载完成后按声音内容去重（只比声音部分，不比标签/封面）：与库内已有
+    # 文件声音完全一致时回退本次下载
+    # （删除新文件与新建空目录），任务标记 skipped 并复用库内文件
+    "download_md5_dedup": "true",
     # 下载目录结构：artist = /歌手/歌曲；artist_album = /歌手/专辑 (年份)/歌曲
     # （专辑名缺失的单曲/EP 用歌名当专辑目录；(年份) 仅 artist_album 模式附加，
     # 用于区分同名不同版本的专辑/EP。切换只影响新下载；存量文件是否搬入
@@ -433,6 +416,9 @@ DEFAULT_SETTINGS = {
     "prefer_non_vip": "false",
     # 单账号每自然小时下载成功上限（0=不限制）
     "hourly_limit_per_account": "50",
+    # QQ cookie 自动保活间隔（小时，0=关闭）：定期调桥接服务刷新 musickey，
+    # 避免 QQ 网页 cookie 长期不刷新而提前失效（名义 60 天，不刷新约 1 天即失效）
+    "qq_keepalive_hours": "6",
     # 排除歌曲关键字（英文逗号分隔，如 "live,伴奏,remix"）
     "exclude_keywords": "",
     # 排除过滤应用范围：逗号分隔，如 "playlist,search"（两者都应用）/ "playlist" / "search" / ""（都不应用）
@@ -742,16 +728,3 @@ def init_db(app, db_path: str = "downloads.db") -> None:
         with db.engine.begin() as conn:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_platform_song ON download_tasks (platform, song_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tasks_status ON download_tasks (status)"))
-        # 兼容迁移：给旧 users 表补充 must_change_password 列（存量账号默认 False，不强制改密）
-        if inspector.has_table("users") and not _column_exists(inspector, "users", "must_change_password"):
-            with db.engine.begin() as conn:
-                conn.execute(text("ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 0 NOT NULL"))
-        # 初始化默认管理员账号（仅当 users 表为空时）
-        if not User.query.first():
-            admin = User(username="admin", is_admin=True, enabled=True)
-            admin.set_password("admin123")
-            # 默认口令公开于源码/README：首登强制修改，改完才可使用其他功能
-            admin.must_change_password = True
-            db.session.add(admin)
-            db.session.commit()
-            print("[init_db] 已创建初始管理员账号：admin / admin123（首次登录须修改密码）")

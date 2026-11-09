@@ -29,14 +29,13 @@ from models import (
     OrganizerCleanItem,
     OrganizerJob,
     Setting,
-    User,
     db,
     init_db,
 )
 
 
 # ======================================================================
-# 公共：登录态 client（/api/songs、/api/tasks 仅要求登录）
+# 公共：API client（v0.9.0.0 起无登录，直接请求）
 # ======================================================================
 @pytest.fixture
 def api_client(webapp_app):
@@ -48,13 +47,7 @@ def api_client(webapp_app):
     from task_manager import TaskManager
     app.config["TASK_MANAGER"] = TaskManager(app)
     app.register_blueprint(api_bp, url_prefix="/api")
-    user = User(username="root", is_admin=True, enabled=True)
-    user.set_password("admin123")
-    db.session.add(user)
-    db.session.commit()
     client = app.test_client()
-    with client.session_transaction() as sess:
-        sess["uid"] = user.id
     return client
 
 
@@ -251,12 +244,11 @@ def test_init_db_migrates_legacy_db_and_creates_organizer_tables(tmp_path):
         # UPG-01：kind 补列，存量任务一律视为普通下载
         assert task[5] == "normal"
 
-        # users 旧行保留 + must_change_password 补列默认 0（存量账号不强制改密）
+        # users 表已随登录体系移除（v0.9.0.0）：不再补列，存量旧行原样保留
         user = db.session.execute(
-            text("SELECT username, must_change_password FROM users")
+            text("SELECT username FROM users")
         ).fetchone()
         assert user[0] == "admin"
-        assert user[1] == 0
 
         # 用户自定义设置不被默认值覆盖
         assert Setting.get("output_dir", "") == "/old/downloads"

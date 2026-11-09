@@ -185,6 +185,13 @@
                                     <span class="ui-check"><input type="checkbox" x-model="form.overwrite_existing"></span>
                                     <span class="set-checktext">同名文件已存在时覆盖重新下载（默认跳过）</span>
                                 </label>
+                                <label class="set-check">
+                                    <span class="ui-check"><input type="checkbox" x-model="form.download_md5_dedup"></span>
+                                    <span class="set-checktext">下载完成后按声音内容去重
+                                        <small>声音部分与库内已有文件完全一致时回退本次下载（删除新文件与新建空目录，复用库内文件，下载历史记录命中了哪首）；
+                                            只比声音、不比专辑名/封面等标签，可识别同首歌被不同专辑/歌单收录为不同 ID 的重复</small>
+                                    </span>
+                                </label>
                             </div>
                             <div class="set-cols-2 set-field">
                                 <div>
@@ -307,6 +314,11 @@
                                 <input type="number" class="ui-input set-input" x-model="form.hourly_limit_per_account" min="0" max="10000">
                                 <div class="set-hint">0=不限制；自然小时内单账号成功达上限后切换账号，全部达上限则暂停 30 分钟</div>
                             </div>
+                            <div class="set-field">
+                                <label class="set-label">QQ cookie 自动保活间隔（小时）</label>
+                                <input type="number" class="ui-input set-input" x-model="form.qq_keepalive_hours" min="0" max="24">
+                                <div class="set-hint">定期刷新 QQ 音乐登录凭证（musickey），避免网页 cookie 长期不刷新提前失效；0=关闭。刷新结果写入账号管理页的 cookie 字段并记录日志</div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -387,17 +399,15 @@
                     </div>
                 </div>
 
-                <!-- 保存（非管理员禁用：window.IS_ADMIN 模板注入 + 后端二次校验） -->
+                <!-- 保存 -->
                 <div class="set-savebar">
                     <span class="set-dirty" x-show="isDirty" x-cloak><i class="bi bi-circle-fill"></i> 有未保存的更改</span>
-                    <span class="ui-badge ui-badge-warning" x-show="!isAdmin">仅管理员可修改设置</span>
                     <button type="submit" class="ui-btn ui-btn-primary"
-                            :disabled="saving || loading || !isAdmin"
+                            :disabled="saving || loading"
                             :class="{ 'is-loading': saving }"
-                            :title="isAdmin ? '' : '仅管理员可修改设置'">
-                        <span class="ui-spinner" x-show="saving"></span>
+>                        <span class="ui-spinner" x-show="saving"></span>
                         <i class="bi bi-save" x-show="!saving"></i>
-                        <span x-text="isAdmin ? '保存设置' : '保存设置（仅管理员）'"></span>
+                        <span>保存设置</span>
                     </button>
                 </div>
 
@@ -405,12 +415,6 @@
         </div>
     </form>
 </div>
-
-<script>
-    // is_admin 由 app.py context processor 注入；非管理员禁用保存
-    // （后端 PUT /api/settings 亦有 _require_admin 校验，此处只是避免无效提交）
-    window.IS_ADMIN = {{ 'true' if is_admin else 'false' }};
-</script>
 {% endblock %}
 
 {% block scripts %}
