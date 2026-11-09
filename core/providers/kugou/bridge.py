@@ -2,11 +2,11 @@
 
 负责拉起/停止预编译二进制（kugou_api_win.exe / kugou_api_linux），
 对外提供幂等的 start/stop/status。单个进程仅监听 127.0.0.1 端口（默认 45603）。
-
-与 netease/bridge.py 结构对齐，差异点：
+公共进程管理逻辑见 core/providers/_bridge_base.py，本模块差异点：
 - 二进制为 KuGouMusicApi（Node/Express）的 pkg 单文件打包产物，
   监听地址经 PORT/HOST 环境变量控制（与 ncm-api 相同）
-- 就绪探测走 GET /（public/index.html 静态页，不碰上游）
+- 就绪探测走 GET /（public/index.html 静态页，不碰上游），收到任意 HTTP
+  响应即就绪（基类默认）
 - 注意：二进制文件名为用户实际放置的下划线风格
   （kugou_api_win.exe / kugou_api_linux），与 ncm-api-* 连字符风格不同，
   改名需同步修改 _BINARIES
@@ -16,24 +16,9 @@
 - GET / 返回 HTTP 200；/register/dev、/search、/song/url/new 等主链路全部可用
 - /song/url/auth/merge 的 P0 崩溃缺陷在该打包版中已修复（bogus hash 触发
   "本次请求需要验证" 后服务仍存活），client 白名单仍禁调该接口作为二道防线
-
-此模块为基础设施层，不经过 Provider 抽象。
 """
 
-import logging
-import os
-import socket
-import subprocess
-import sys
-import threading
-import time
-from pathlib import Path
-
-import requests
-
-from .. import _proc
-
-logger = logging.getLogger(__name__)
+from .._bridge_base import LOCAL_HOST, ApiBridge, make_singleton_getter
 
 # 平台 -> 二进制文件名（与 api/ 目录实际放置的文件名一致）
 _BINARIES = {
@@ -42,209 +27,19 @@ _BINARIES = {
 }
 
 
-class KuGouApiBridge:
-    def __init__(self, bin_dir: Path, auto_start: bool = True, timeout: float = 60.0, port: int = 0):
-        self.bin_dir = Path(bin_dir).resolve()
-        self.bin_path = self.bin_dir / _BINARIES.get(sys.platform, "")
-        self.auto_start = auto_start
-        self.timeout = timeout
-        self._preferred_port = port
-        self.proc: subprocess.Popen | None = None
-        self.port: int | None = None
-        self.base_url: str | None = None
-        self._lock = threading.Lock()
-        # 子进程日志（open_api_log 打开的文件句柄及路径，重启/停止时关闭）
-        self._log_fh = None
-        self._log_path: str | None = None
+class KuGouApiBridge(ApiBridge):
+    BINARIES = _BINARIES
+    LABEL = "酷狗音乐API"
+    MISSING_BINARY_MSG = (
+        "未找到酷狗音乐API二进制: {path}\n"
+        "请将 kugou-api 对应平台版本放到 api/ 目录"
+    )
+    LOG_NAME = "kugou-api"
 
-    def status(self) -> dict:
-        # 不加 self._lock——首次 start() 持锁最长 60s，共用锁会让设置页
-        # 3s 轮询 /api/kugou/status 全部挂起。仅读原子引用，瞬时不一致可接受。
-        # 局部快照 p = self.proc，避免与 stop() 并发时两次读 self.proc
-        # 中间被置 None 而抛 AttributeError。
-        p = self.proc
-        return {
-            "running": self._is_alive(),
-            "port": self.port,
-            "preferred_port": self._preferred_port,
-            "base_url": self.base_url,
-            "pid": p.pid if p else None,
-            "exe": str(self.bin_path),
-            "platform": sys.platform,
-            "bin_exists": self.bin_path.exists(),
-            "auto_start": self.auto_start,
-        }
-
-    def start(self) -> str:
-        """启动（幂等），返回 base_url；失败抛 RuntimeError（中文原因）"""
-        with self._lock:
-            if self._is_alive():
-                return self.base_url
-            self.proc = None      # 清理上次退出/失败的残留引用
-            self.port = None
-            self.base_url = None
-            if not self.bin_path.exists():
-                raise RuntimeError(
-                    f"未找到酷狗音乐API二进制: {self.bin_path}\n"
-                    "请将 kugou-api 对应平台版本放到 api/ 目录"
-                )
-            if sys.platform == "linux":
-                # NAS 套件安装目录常为 root 所有、运行用户无写权限，chmod 会抛
-                # PermissionError(EPERM)；执行位由打包/安装时设置，这里只做兜底：
-                # 失败则忽略，改用 X_OK 检查，仍不可执行才报错
-                try:
-                    self.bin_path.chmod(0o755)
-                except PermissionError:
-                    if not os.access(self.bin_path, os.X_OK):
-                        raise RuntimeError(
-                            f"无法为 {self.bin_path} 设置执行权限且文件不可执行\n"
-                            "请以 root 执行: chmod +x <该文件>"
-                        )
-                    logger.debug("%s 已可执行，跳过 chmod", self.bin_path.name)
-            # 端口 TOCTOU 缓解（#21）：_find_free_port 探测后即释放 socket，
-            # spawn 前该端口可能被并发抢占（设置页连点/重启竞态）。探活失败
-            # 时换随机端口重试一次（第二次失败按原异常抛出，不做无限重试）
-            last_exc: Exception | None = None
-            for attempt in range(2):
-                if attempt:
-                    logger.warning("酷狗音乐API服务探活失败，换端口重试一次: %s", self.bin_path.name)
-                self.port = self._find_free_port(self._preferred_port if attempt == 0 else 0)
-                # 显式 HOST=127.0.0.1——server.js 中 HOST 缺省为空字符串，
-                # 等效监听所有网卡；内置 API 无鉴权，暴露局域网有安全风险
-                env = {**os.environ, "PORT": str(self.port), "HOST": "127.0.0.1"}
-                for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-                    env.pop(k, None)
-                # 子进程日志：写文件而非 DEVNULL，进程秒退时保留现场（与
-                # qq/netease bridge 对齐；目录不可写时回退 DEVNULL 不阻断启动）
-                self._close_log()
-                log_fh, log_path = _proc.open_api_log("kugou-api")
-                self._log_fh = log_fh
-                self._log_path = log_path
-                # spawn_protected 启用"父进程死亡即杀"（Win 作业对象 / Linux PDEATHSIG），
-                # 下载器无论正常还是被强制退出，其启动的 API 进程都会被系统关闭
-                # Popen 在 exec 被系统拒绝时抛 OSError（PermissionError / Exec
-                # format error / 缺 glibc 加载器 / WinError 193 等），统一转为
-                # RuntimeError 以兑现 start() 的异常契约——main() 与 Web 启停
-                # 路由均只捕获 RuntimeError，OSError 逃逸会导致整个服务启动失败
-                try:
-                    self.proc = _proc.spawn_protected(
-                        [str(self.bin_path)], cwd=str(self.bin_dir), env=env,
-                        stdout=log_fh if log_fh else subprocess.DEVNULL,
-                        stderr=subprocess.STDOUT if log_fh else subprocess.DEVNULL,
-                    )
-                except OSError as e:
-                    self._close_log()
-                    self.port = None
-                    raise RuntimeError(
-                        f"酷狗音乐API进程启动失败（{e}），请检查二进制文件完整性与执行权限"
-                    ) from e
-                self.base_url = f"http://127.0.0.1:{self.port}"
-                try:
-                    self._wait_ready(self.timeout)
-                    return self.base_url
-                except Exception as e:
-                    self._kill_proc()
-                    self.proc = None
-                    self.port = None
-                    self.base_url = None
-                    last_exc = e
-            assert last_exc is not None
-            raise last_exc
-
-    def stop(self) -> None:
-        """停止（幂等）"""
-        with self._lock:
-            self._kill_proc()
-            self.proc = None
-            self.port = None
-            self.base_url = None
-            self._close_log()
-
-    def _close_log(self) -> None:
-        """关闭当前子进程日志句柄（重启/停止时复用，幂等）"""
-        if self._log_fh is not None:
-            try:
-                self._log_fh.close()
-            except OSError:
-                pass
-            self._log_fh = None
-
-    def _kill_proc(self) -> None:
-        """terminate → 等待 → kill（stop 与 start 失败路径复用）"""
-        if self.proc is None:
-            return
-        if self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=5)
-
-    def _is_alive(self) -> bool:
-        return bool(self.proc and self.proc.poll() is None)
-
-    def _find_free_port(self, preferred: int = 0) -> int:
-        """查找空闲端口；preferred 非 0 时优先尝试绑定指定端口，失败则回退随机端口"""
-        if preferred > 0:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                try:
-                    s.bind(("127.0.0.1", preferred))
-                    return preferred
-                except OSError:
-                    pass
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind(("127.0.0.1", 0))
-            return s.getsockname()[1]
-
-    def _wait_ready(self, timeout: float) -> None:
-        # 探测根路由（纯本地静态，最快、不碰上游）；判定标准与状态码解耦：
-        # 收到任意 HTTP 响应即视为服务已监听就绪（index.html 将来被移除返回
-        # 404 同样证明服务活着），连接拒绝/超时才视为未就绪继续轮询。
-        # requests.get 对 4xx/5xx 不抛异常，仅连接层错误抛 RequestException。
-        # 同时清空代理 env 只作用于子进程，此处需显式 proxies 强制直连 127.0.0.1。
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if self.proc.poll() is not None:
-                tail = (f"（exit code={self.proc.returncode}，"
-                        f"输出见 {self._log_path}）") if self._log_path else ""
-                raise RuntimeError(f"酷狗音乐API进程异常退出{tail}，请检查二进制完整性")
-            try:
-                requests.get(
-                    f"{self.base_url}/", timeout=2,
-                    proxies={"http": None, "https": None},
-                )
-                return  # 收到任意 HTTP 响应即就绪
-            except requests.exceptions.RequestException:
-                pass  # 未就绪，继续轮询
-            time.sleep(0.5)
-        raise RuntimeError("酷狗音乐API服务启动超时")
+    def _listen_env(self, port: int) -> dict[str, str]:
+        # 显式 HOST=127.0.0.1——server.js 中 HOST 缺省为空字符串，
+        # 等效监听所有网卡；内置 API 无鉴权，暴露局域网有安全风险
+        return {"PORT": str(port), "HOST": LOCAL_HOST}
 
 
-# ---------------- 模块级单例 ----------------
-_bridge: KuGouApiBridge | None = None
-_bridge_lock = threading.Lock()
-
-
-def get_bridge(auto_start: bool | None = None, port: int | None = None) -> KuGouApiBridge:
-    """获取全局唯一 bridge（不访问数据库，无需 app context）
-
-    auto_start / port 由 main() 在 app context 内读出后显式传入；main() 总是
-    首个调用者并传值，后续调用返回既有单例，参数被忽略。
-    """
-    global _bridge
-    if _bridge is None:
-        with _bridge_lock:
-            if _bridge is None:
-                # frozen: PyInstaller 打包后用 exe 同级目录作为根目录
-                if getattr(sys, "frozen", False):
-                    root = Path(sys.executable).resolve().parent
-                else:
-                    # kugou(0) → providers(1) → core(2) → source(3)
-                    root = Path(__file__).resolve().parents[3]
-                _bridge = KuGouApiBridge(
-                    bin_dir=root / "api",
-                    auto_start=(True if auto_start is None else auto_start),
-                    port=(0 if port is None else port),
-                )
-    return _bridge
+get_bridge = make_singleton_getter(KuGouApiBridge)
