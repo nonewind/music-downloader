@@ -1,4 +1,7 @@
-// 音乐整理页（ORG-04 工作台升级）：Alpine 单一状态入口 organizePage()
+// 音乐库页（原整理页）：Alpine 单一状态入口 organizePage()
+//
+// 两块内容：浏览（歌手 → 专辑 → 歌曲，按文件夹分组）和待处理（重复文件，
+// 原整理页的重复组清理原样保留）。
 //
 // 依赖全局工具（app.js 先于本脚本加载）：api()（内部处理 APP_BASE 前缀与
 // 401/403/code!=0，默认 15s 超时——本页全部接口均提交即返回，无需长超时）、
@@ -19,6 +22,11 @@
 //   GET  /api/organize/duplicates -> {groups:[{group_type,platform,song_id,
 //                                     recommended,reason,items:[...其中
 //                                     item.downloads={count,latest}]}]}
+//   GET  /api/library/tree        -> {artists:[{name,count,albums:[{dir,name,
+//                                     year,count,size,lossless}]}],unplaced}
+//   GET  /api/library/album?dir=  -> {dir,artist,name,year,albumartist,items:[...行 + track]}
+//   POST /api/library/album/edit  -> preview=true：{new_dir,plans:[{from,to,moved,tags,skip}]}
+//                                    preview=false：{new_dir,results:[{from,to,status,msg}]}
 // 任务终态：success / partial / failed / interrupted。
 // 轮询模式与 history.js 相同：定时器常开（1s），document.hidden 或上一轮
 // 未返回时跳过本轮。离开页面后再回来：init 经 state 恢复在途任务续轮询，
@@ -38,26 +46,35 @@ function organizePage() {
         selectedCount: 0,     // 勾选文件数（勾选变化时随 recomputeSummary 重算）
         selectedSongs: 0,     // 勾选涉及歌数（=有勾选的组数）
         freedBytes: 0,        // 勾选文件字节合计
-        directDelete: null,   // true=永久删除模式；false=回收站模式；null=加载中
         scannedOnce: false,   // 已有可展示的扫描结果（区分「尚未扫描」与「无重复」空态）
         lastScan: null,       // 最近一次终态扫描任务（页头统计卡摘要）
         lastClean: null,      // 最近一次终态清理任务（页头统计卡摘要）
         index: { total: 0, active: 0, missing: 0 },  // 索引统计（state.index）
-        result: null,         // 清理结果卡 {status,ok,trashed,deleted,failed,
+        result: null,         // 清理结果卡 {status,ok,trashed,failed,
                               //  failedItems,repaired,cleared}；null=不显示
+
+        // ---- 音乐库浏览 ----
+        view: "browse",       // browse=浏览 / pending=待处理
+        artists: [],          // /api/library/tree 的 artists
+        unplaced: 0,          // 不在「歌手/专辑/歌曲」三层结构里的文件数
+        artistQuery: "",      // 歌手搜索框
+        artist: null,         // 当前歌手（artists 里的一项）；null=没选
+        album: null,          // 当前专辑 {dir,name,year,count,size,lossless,items}；null=没打开
+        albumLoading: false,
+        singlesOpen: false,   // 歌手页「单曲」段是否展开
+        picked: new Set(),    // 勾选的文件路径（专辑歌曲 / 未归位文件）
+        unplacedItems: [],    // /api/library/unplaced 的 items（带 problem）
+        emptyDirs: [],        // /api/library/empty-dirs 的 dirs（相对路径）
+        // 改专辑信息弹窗：stage=form 填表 / preview 看改动
+        edit: { mode: "edit", stage: "form", fromDir: "", album: "", albumartist: "", year: "",
+                moveFolder: true, paths: [], targetQuery: "", target: "", retag: true,
+                busy: false, error: "", preview: null },
 
         pollTimer: null,      // 1s 轮询定时器（常开，内部条件跳过）
         _polling: false,      // 防重入：上一轮请求未返回时跳过本轮
 
-        // Alpine 组件初始化：读删除模式 + 恢复服务端状态（在途任务/上次结果）
+        // Alpine 组件初始化：恢复服务端状态（在途任务/上次结果）
         async init() {
-            // 删除模式读取失败按回收站兜底，不阻塞页面
-            try {
-                const data = await api("/api/settings");
-                this.directDelete = (data.data?.organize_direct_delete || "false") === "true";
-            } catch (e) {
-                this.directDelete = false;
-            }
             try {
                 const state = await api("/api/organize/state");
                 const d = state.data || {};
@@ -76,7 +93,7 @@ function organizePage() {
                 showToast(e.message, "错误");
             }
             if (this.scannedOnce) {
-                await this.loadGroups("recommended");
+                await Promise.all([this.loadGroups("recommended"), this.loadTree(), this.loadPending()]);
             }
             this.loaded = true;
         },
@@ -174,7 +191,7 @@ function organizePage() {
             } catch (e) {
                 showToast(e.message, "错误");
             }
-            await this.loadGroups(preselect);
+            await Promise.all([this.loadGroups(preselect), this.loadTree(), this.loadPending()]);
         },
 
         // 分组展开：files 为后端 items；preselect="recommended" 时默认勾选
@@ -334,7 +351,390 @@ function organizePage() {
             return ext || "--";
         },
 
-        // ---- 页头统计卡 ----
+        // ============================================================
+        // 音乐库浏览（歌手 → 专辑 → 歌曲）
+        // ============================================================
+        async loadTree() {
+            try {
+                const data = await api("/api/library/tree");
+                this.artists = data.data.artists;
+                this.unplaced = data.data.unplaced;
+            } catch (e) {
+                showToast(e.message, "错误");
+                return;
+            }
+            // 扫描/清理后重读：当前歌手、专辑按名字找回（可能已经没了）
+            if (!this.artist) return;
+            const name = this.artist.name;
+            this.artist = this.artists.find(a => a.name === name) || null;
+            if (!this.artist || !this.album) {
+                this.album = null;
+                return;
+            }
+            const dir = this.album.dir;
+            const found = this.artist.albums.find(al => al.dir === dir);
+            if (found) {
+                await this.openAlbum(found);
+            } else {
+                this.album = null;
+            }
+        },
+
+        // 手机上一次只显示一层；电脑上歌手栏一直在
+        level() {
+            if (this.album) return "album";
+            if (this.artist) return "artist";
+            return "artists";
+        },
+
+        get filteredArtists() {
+            const q = this.artistQuery.trim().toLowerCase();
+            if (!q) return this.artists;
+            return this.artists.filter(a => a.name.toLowerCase().includes(q));
+        },
+
+        // 专辑文件夹里只有一首的算单曲，折叠成一段单独放
+        get artistAlbums() {
+            if (!this.artist) return [];
+            return this.artist.albums.filter(al => al.count > 1);
+        },
+        get artistSingles() {
+            if (!this.artist) return [];
+            return this.artist.albums.filter(al => al.count === 1);
+        },
+
+        _scrollTopOnPhone() {
+            if (window.matchMedia("(max-width: 767.98px)").matches) window.scrollTo(0, 0);
+        },
+
+        openArtist(a) {
+            this.artist = a;
+            this.album = null;
+            this.clearPicked();
+            // 只有单曲的歌手直接展开单曲段
+            this.singlesOpen = this.artistAlbums.length === 0;
+            this._scrollTopOnPhone();
+        },
+
+        async openAlbum(al) {
+            this.album = { ...al, items: null };
+            this.albumLoading = true;
+            this.clearPicked();
+            this._scrollTopOnPhone();
+            try {
+                const data = await api("/api/library/album?dir=" + encodeURIComponent(al.dir));
+                // 加载期间又点了别的专辑：丢掉这次结果
+                if (!this.album || this.album.dir !== al.dir) return;
+                this.album.items = data.data.items;
+                this.album.year = data.data.year;
+                this.album.albumartist = data.data.albumartist;
+            } catch (e) {
+                showToast(e.message, "错误");
+            } finally {
+                if (this.album && this.album.dir === al.dir) this.albumLoading = false;
+            }
+        },
+
+        backToArtists() {
+            this.artist = null;
+            this.album = null;
+            this.clearPicked();
+        },
+
+        backToArtist() {
+            this.album = null;
+            this.clearPicked();
+        },
+
+        setView(v) {
+            this.view = v;
+            this.clearPicked();
+        },
+
+        // ============================================================
+        // 勾选（专辑歌曲、未归位文件共用一份；换专辑/换页面时清空）
+        // ============================================================
+        togglePick(path, on) {
+            const next = new Set(this.picked);
+            if (on) next.add(path);
+            else next.delete(path);
+            this.picked = next;
+        },
+
+        clearPicked() {
+            this.picked = new Set();
+        },
+
+        // 选中的歌移入回收站：复用重复文件清理的后台任务（进度条、结果卡都一样）
+        async trashPicked() {
+            if (this.cleaning || this.scanning || !this.picked.size) return;
+            const ok = await uiConfirm({
+                title: "移入回收站",
+                message: "选中的 " + this.picked.size + " 首歌将移入下载目录下的 .trash 回收站，可手动恢复。",
+                confirmText: "移入回收站",
+                danger: true,
+            });
+            if (!ok) return;
+            await this._submitClean([...this.picked], {});
+        },
+
+        // ============================================================
+        // 待处理：未归位文件、空文件夹
+        // ============================================================
+        async loadPending() {
+            try {
+                const [un, empty] = await Promise.all([
+                    api("/api/library/unplaced"),
+                    api("/api/library/empty-dirs"),
+                ]);
+                this.unplacedItems = un.data.items;
+                this.emptyDirs = empty.data.dirs;
+            } catch (e) {
+                showToast(e.message, "错误");
+            }
+        },
+
+        pendingCount() {
+            return this.groups.length + this.unplacedItems.length + this.emptyDirs.length;
+        },
+
+        async removeEmptyDirs() {
+            const ok = await uiConfirm({
+                title: "删掉空文件夹",
+                message: "将删掉 " + this.emptyDirs.length + " 个空文件夹。只删一个文件都没有的文件夹，删的时候会再检查一遍。",
+                confirmText: "删掉",
+                danger: true,
+            });
+            if (!ok) return;
+            try {
+                const data = await api("/api/library/empty-dirs/remove", { method: "POST" });
+                showToast(data.msg, "完成", "success");
+            } catch (e) {
+                showToast(e.message, "错误");
+            }
+            await this.loadPending();
+        },
+
+        // ============================================================
+        // 改专辑信息 / 移到别的专辑（填表 → 预览 → 确认执行；
+        // 预览和执行后端走同一份计划，两个弹窗共用 edit 状态和预览、页脚）
+        // ============================================================
+        _newEdit(mode) {
+            return {
+                mode,                 // edit=改专辑信息 / move=移到别的专辑
+                stage: "form",
+                fromDir: this.album ? this.album.dir : "",
+                album: "", albumartist: "", year: "", moveFolder: true,
+                paths: [], targetQuery: "", target: "", retag: true,
+                busy: false, error: "", preview: null,
+            };
+        },
+
+        openEdit() {
+            this.edit = this._newEdit("edit");
+            this.edit.album = this.album.name;
+            this.edit.albumartist = this.album.albumartist;
+            this.edit.year = this.album.year;
+            this.$store.modals.albumEdit = true;
+        },
+
+        openMove() {
+            if (!this.picked.size) return;
+            this.edit = this._newEdit("move");
+            this.edit.paths = [...this.picked];
+            this.$store.modals.songMove = true;
+        },
+
+        closeChange() {
+            this.$store.modals.albumEdit = false;
+            this.$store.modals.songMove = false;
+        },
+
+        // 目标专辑候选：全部专辑（含单曲），按搜索词过滤，当前专辑除外，最多 50 个
+        get moveTargets() {
+            const q = this.edit.targetQuery.trim().toLowerCase();
+            const out = [];
+            for (const a of this.artists) {
+                for (const al of a.albums) {
+                    if (al.dir === this.edit.fromDir) continue;
+                    const text = (a.name + " " + al.name).toLowerCase();
+                    if (q && !text.includes(q)) continue;
+                    out.push({ dir: al.dir, name: a.name + " / " + al.name, sub: this.albumSub(al) });
+                    if (out.length >= 50) return out;
+                }
+            }
+            return out;
+        },
+
+        // 只把改了的字段发给后端
+        _editChanges() {
+            const changes = {};
+            const album = this.edit.album.trim();
+            const albumartist = this.edit.albumartist.trim();
+            const year = this.edit.year.trim();
+            if (album !== this.album.name) changes.album = album;
+            if (albumartist !== this.album.albumartist) changes.albumartist = albumartist;
+            if (year !== this.album.year) changes.year = year;
+            return changes;
+        },
+
+        async _postEdit(preview) {
+            if (this.edit.mode === "move") {
+                return api("/api/library/songs/move", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        paths: this.edit.paths,
+                        target_dir: this.edit.target,
+                        retag: this.edit.retag,
+                        preview,
+                    }),
+                });
+            }
+            return api("/api/library/album/edit", {
+                method: "POST",
+                body: JSON.stringify({
+                    dir: this.edit.fromDir,
+                    changes: this._editChanges(),
+                    move_folder: this.edit.moveFolder,
+                    preview,
+                }),
+            });
+        },
+
+        async previewEdit() {
+            if (this.edit.busy) return;
+            this.edit.error = "";
+            if (this.edit.mode === "move" && !this.edit.target) {
+                this.edit.error = "先选一张目标专辑";
+                return;
+            }
+            if (this.edit.mode === "edit" && !Object.keys(this._editChanges()).length) {
+                this.edit.error = "没有改动任何内容";
+                return;
+            }
+            this.edit.busy = true;
+            try {
+                const data = await this._postEdit(true);
+                this.edit.preview = data.data;
+                this.edit.stage = "preview";
+            } catch (e) {
+                this.edit.error = e.message;
+            } finally {
+                this.edit.busy = false;
+            }
+        },
+
+        async applyEdit() {
+            if (this.edit.busy) return;
+            this.edit.busy = true;
+            this.edit.error = "";
+            let data;
+            try {
+                data = await this._postEdit(false);
+            } catch (e) {
+                this.edit.error = e.message;
+                this.edit.busy = false;
+                return;
+            }
+            this.edit.busy = false;
+            this.closeChange();
+            this.clearPicked();
+
+            // 有失败的把第一条原因也带上
+            const failed = data.data.results.filter(r => r.status === "failed");
+            if (failed.length) {
+                showToast(data.msg + "：" + failed[0].msg, "部分失败", "warning");
+            } else {
+                showToast(data.msg, "改好了", "success");
+            }
+
+            // 移动歌曲：留在原地，重读目录树（当前专辑还在就刷新，空了就回到歌手）和待处理
+            if (this.edit.mode === "move") {
+                await Promise.all([this.loadTree(), this.loadPending()]);
+                return;
+            }
+            // 改专辑信息：重读目录树，打开改完后的专辑（文件夹可能换了名字、换了歌手）
+            const newDir = data.data.new_dir;
+            this.album = null;
+            await this.loadTree();
+            const artistName = newDir.split("/")[0];
+            const artist = this.artists.find(a => a.name === artistName);
+            if (!artist) return;
+            this.openArtist(artist);
+            const album = artist.albums.find(al => al.dir === newDir);
+            if (album) await this.openAlbum(album);
+        },
+
+        previewCount(kind) {
+            const plans = this.edit.preview.plans;
+            if (kind === "skip") return plans.filter(p => p.skip).length;
+            if (kind === "moved") return plans.filter(p => p.moved && !p.skip).length;
+            return plans.filter(p => p.tags.length && !p.skip).length;
+        },
+
+        // 至少有一个文件真的会变，才允许确认
+        previewDoable() {
+            if (!this.edit.preview) return false;
+            return this.edit.preview.plans.some(p => !p.skip && (p.moved || p.tags.length));
+        },
+
+        tagLabel(key) {
+            return { album: "专辑", albumartist: "专辑歌手", year: "年份" }[key];
+        },
+
+        fileName(rel) {
+            return rel.split("/").pop();
+        },
+
+        // ---- 文案 ----
+        statsText() {
+            if (!this.loaded) return "";
+            if (!this.scannedOnce) return "扫描下载目录后，按歌手和专辑浏览、整理你的歌";
+            let songs = 0;
+            let bytes = 0;
+            for (const a of this.artists) {
+                songs += a.count;
+                for (const al of a.albums) bytes += al.size;
+            }
+            const parts = [
+                this.artists.length + " 位歌手",
+                songs + " 首",
+                fmtSizeBytes(bytes),
+                "上次扫描 " + (this.lastScan.finished_at || this.lastScan.created_at),
+            ];
+            return parts.join(" · ");
+        },
+
+        artistSub(a) {
+            const albums = a.albums.filter(al => al.count > 1).length;
+            const singles = a.albums.length - albums;
+            const parts = [];
+            if (albums) parts.push(albums + " 张专辑");
+            if (singles) parts.push(singles + " 首单曲");
+            parts.push("共 " + a.count + " 首");
+            return parts.join(" · ");
+        },
+
+        albumSub(al) {
+            const parts = [];
+            if (al.year) parts.push(al.year);
+            parts.push(al.count + " 首");
+            parts.push(al.lossless ? "无损" : "含有损");
+            parts.push(fmtSizeBytes(al.size));
+            return parts.join(" · ");
+        },
+
+        albumDetailSub() {
+            const al = this.album;
+            const parts = [this.artist.name];
+            if (al.year) parts.push(al.year);
+            parts.push(al.count + " 首");
+            parts.push(al.lossless ? "全部无损" : "含有损");
+            parts.push(fmtSizeBytes(al.size));
+            return parts.join(" · ");
+        },
+
+        // ---- 上次扫描 / 最近清理 ----
         lastScanText() {
             if (!this.lastScan) return "未扫描";
             const r = this.lastScan.result || {};
@@ -346,6 +746,7 @@ function organizePage() {
         lastCleanText() {
             if (!this.lastClean) return "未清理过";
             const r = this.lastClean.result || {};
+            // 旧版直删模式的任务结果里还有 deleted，一起算进成功数
             const ok = (r.deleted || 0) + (r.trashed || 0);
             const statusText = {
                 success: "完成", partial: "部分完成",
@@ -409,28 +810,32 @@ function organizePage() {
 
         async confirmClean() {
             if (this.cleaning || this.scanning || !this.selectedCount) return;  // 防重复提交
+            const ok = await this._submitClean(
+                this.selectedItems.map(it => it.path), this.buildRepair());
+            if (ok) this.$store.modals.clean = false;
+        },
+
+        // 提交清理任务（重复文件清理、音乐库里删歌共用）；成功返回 true
+        async _submitClean(paths, repair) {
             this.cleaning = true;    // 提交期间即锁定（防双击重复入队）
             try {
                 // 提交即返回 job_id（默认 15s 超时足够），执行进度走轮询
                 const data = await api("/api/organize/clean", {
                     method: "POST",
-                    body: JSON.stringify({
-                        delete_paths: this.selectedItems.map(it => it.path),
-                        repair: this.buildRepair(),
-                    }),
+                    body: JSON.stringify({ delete_paths: paths, repair }),
                 });
                 const d = data.data || {};
-                this.$store.modals.clean = false;
                 this.job = {
                     id: d.job_id, job_type: "clean", status: d.status,
-                    progress: 0, processed: 0, total: this.selectedCount,
+                    progress: 0, processed: 0, total: paths.length,
                     error_msg: null, result: null,
                 };
                 this.startPolling();     // cleaning 保持 true，终态由 finishClean 复位
+                return true;
             } catch (e) {
-                this.cleaning = false;   // 提交失败：解锁 Modal 可重试
-                // 请求异常：Modal 保持打开，错误经 toast 提示
+                this.cleaning = false;   // 提交失败：解锁可重试
                 showToast(e.message, "错误");
+                return false;
             }
         },
 
@@ -442,13 +847,11 @@ function organizePage() {
             const failedItems = items
                 .filter(i => i.status === "failed")
                 .map(i => ({ path: i.path, error_msg: i.error_msg }));
-            const okCount = (r.deleted || 0) + (r.trashed || 0);
+            const okCount = r.trashed || 0;
             this.result = {
                 status: job.status,
                 total: r.total ?? items.length,
                 ok: okCount,
-                trashed: r.trashed || 0,
-                deleted: r.deleted || 0,
                 failed: r.failed ?? failedItems.length,
                 failedItems,
                 repaired: r.repaired || [],
@@ -456,9 +859,7 @@ function organizePage() {
             };
             this.job = null;
             if (job.status === "success") {
-                showToast("已清理 " + okCount + " 个文件（回收站 "
-                          + (r.trashed || 0) + " / 直删 " + (r.deleted || 0) + "）",
-                          "清理完成", "success");
+                showToast("已把 " + okCount + " 个文件移入回收站", "清理完成", "success");
             } else if (job.status === "partial") {
                 showToast(failedItems.length + " 个文件清理失败，详见结果卡",
                           "部分失败", "warning");
@@ -470,6 +871,7 @@ function organizePage() {
             // 成功后清空本次选择；分组/摘要从服务端重读（已删文件自动消失，
             // 索引行状态与统计卡同步更新）
             this.clearSelection();
+            this.clearPicked();
             await this.refreshData("none");
         },
 

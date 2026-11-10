@@ -1,18 +1,68 @@
 {% extends "base.html" %}
 {# base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
 {% import "macros/ui.html" as ui %}
-{% block title %}整理 - Deen音乐下载器{% endblock %}
+{% block title %}音乐库 - Deen音乐下载器{% endblock %}
 {% block content %}
 <style>
     /* 音乐整理页局部样式（org- 前缀，页面自治；ui- 组件层不做改动） */
-    .org-stats { margin-bottom: 14px; }
-    .org-stats-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 32px; }
-    .org-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .org-stat-label { font-size: 13px; color: var(--ui-text-3); white-space: nowrap; }
-    .org-stat-value { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; color: var(--ui-text); }
-    .org-scanbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
-    .org-summary { font-size: 15px; color: var(--ui-text-2); }
-    .org-summary b { color: var(--ui-text); font-weight: 600; }
+    /* 音乐库浏览（lib- 前缀）：电脑两栏（歌手 | 专辑/歌曲），手机一次一层 */
+    .lib-views { margin-bottom: 14px; }
+    .lib-browse { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; align-items: start; }
+    .lib-artists { position: sticky; top: calc(var(--topbar-h) + 8px); display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - var(--topbar-h) - 24px); }
+    .lib-artists .ui-input { width: 100%; }
+    .lib-artist-list { overflow-y: auto; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-l); padding: 4px; }
+    .lib-artist { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 40px; padding: 6px 10px; border: 0; border-radius: var(--ui-r-s); background: transparent; color: var(--ui-text); font-size: 15px; text-align: left; }
+    .lib-artist:hover { background: var(--ui-bg); }
+    .lib-artist.is-on { background: var(--ui-primary-soft); color: var(--ui-primary); font-weight: 600; }
+    .lib-artist-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lib-artist-count { flex-shrink: 0; font-size: 13px; color: var(--ui-text-3); font-weight: 400; }
+    .lib-head { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; }
+    .lib-head-main { flex: 1; min-width: 0; }
+    .lib-head-title { font-size: 20px; font-weight: 700; line-height: 1.3; word-break: break-word; }
+    .lib-head-sub { margin-top: 2px; font-size: 14px; color: var(--ui-text-2); word-break: break-all; }
+    .lib-back { flex-shrink: 0; }
+    @media (min-width: 768px) { .lib-back-artists { display: none; } }
+    .lib-sec { margin: 18px 0 8px; font-size: 15px; font-weight: 600; color: var(--ui-text-2); }
+    .lib-fold { display: flex; align-items: center; gap: 6px; width: 100%; margin: 18px 0 8px; padding: 0; border: 0; background: transparent; font-size: 15px; font-weight: 600; color: var(--ui-text-2); text-align: left; }
+    .lib-row { cursor: pointer; min-height: 56px; padding: 10px 16px; }
+    .lib-row:hover { background: var(--ui-primary-softer); }
+    .lib-row .list-title { font-size: 16px; }
+    .lib-chev { color: var(--ui-text-3); }
+    .lib-song { display: grid; grid-template-columns: 28px 28px minmax(0, 1fr) auto 72px 52px; cursor: pointer; align-items: center; gap: 10px; min-height: 52px; padding: 8px 16px; border-bottom: 1px solid #eeeee9; font-size: 15px; }
+    .lib-song:last-child { border-bottom: 0; }
+    .lib-track { font-size: 13px; color: var(--ui-text-3); text-align: right; }
+    .lib-song-main { min-width: 0; }
+    .lib-song-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lib-song-sub { font-size: 13px; color: var(--ui-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lib-spec-inline { display: none; }        /* 只在手机上显示 */
+    .lib-hint { padding: 40px 12px; text-align: center; font-size: 15px; color: var(--ui-text-3); }
+    .lib-sec-first { margin-bottom: 8px; }
+    .lib-pending-sec { margin-top: 28px; }
+    .lib-song.is-picked { background: var(--ui-primary-softer); box-shadow: inset 3px 0 0 var(--ui-primary); }
+    .lib-pickbar { margin-top: 10px; }
+    .lib-un-row { grid-template-columns: 28px minmax(0, 1fr) auto 72px; }
+    .lib-problem { color: var(--ui-danger); }
+    .lib-dirlist { display: flex; flex-direction: column; gap: 4px; padding: 10px 14px; }
+    .lib-target { display: block; width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--ui-r-s); background: transparent; text-align: left; font-size: 15px; color: var(--ui-text); }
+    .lib-target:hover { background: var(--ui-bg); }
+    .lib-target.is-on { border-color: var(--ui-primary); background: var(--ui-primary-soft); }
+    .lib-target small { display: block; font-size: 13px; color: var(--ui-text-2); }
+    .lib-targets { max-height: 40vh; overflow-y: auto; margin: 8px 0 14px; padding: 4px; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
+    /* 改专辑信息弹窗 + 预览 */
+    .lib-label { display: block; margin-bottom: 14px; font-size: 15px; color: var(--ui-text); }
+    .lib-label .ui-input { display: block; width: 100%; margin-top: 6px; }
+    .lib-check { display: flex; align-items: flex-start; gap: 8px; font-size: 15px; color: var(--ui-text); cursor: pointer; }
+    .lib-check small { display: block; font-size: 13px; color: var(--ui-text-2); }
+    .lib-err { margin-top: 10px; font-size: 14px; color: var(--ui-danger); }
+    .lib-pv-sum { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-bottom: 10px; font-size: 15px; color: var(--ui-text-2); }
+    .lib-pv-sum b { color: var(--ui-text); }
+    .lib-pv-list { max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px; background: var(--ui-bg); border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
+    .lib-pv-item { font-size: 13px; color: var(--ui-text-2); word-break: break-all; }
+    .lib-pv-item b { color: var(--ui-text); font-weight: 600; }
+    .lib-pv-skip { color: var(--ui-warning); }
+    .lib-pv-note { margin: 10px 0 0; font-size: 13px; color: var(--ui-text-3); }
+    .lib-pending-sum { margin-bottom: 12px; font-size: 15px; color: var(--ui-text-2); }
+    .lib-pending-sum b { color: var(--ui-text); font-weight: 600; }
     .org-jobbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px var(--ui-sp-5); margin-bottom: 14px; }
     .org-job-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; font-size: 15px; color: var(--ui-text); }
     .org-job-prog { position: relative; flex: 1 1 160px; min-width: 120px; max-width: 320px; height: 8px; background: var(--ui-bg); border-radius: 999px; overflow: hidden; }
@@ -54,71 +104,45 @@
         .org-row { display: flex; flex-wrap: wrap; row-gap: 2px; min-height: 0; padding: 6px 14px 6px 10px; }
         .org-name { flex: 1 1 auto; min-width: 55%; white-space: normal; }
         .org-spec { order: 8; flex-basis: 100%; text-align: left; padding-left: 46px; }  /* 规格列折行 */
-        .org-stats-row { gap: 8px 20px; }
-        .org-stat-value { max-width: 200px; }
+        .lib-browse { display: block; }
+        .lib-artists { position: static; max-height: none; }
+        .lib-artist-list { overflow: visible; }
+        .lib-browse[data-level="artists"] .lib-main { display: none; }
+        .lib-browse:not([data-level="artists"]) .lib-artists { display: none; }
+        .lib-song { grid-template-columns: 28px 22px minmax(0, 1fr); }
+        .lib-song .lib-size, .lib-song .lib-dur { display: none; }
+        .lib-song > .ui-badge { display: none; }   /* 音质改写在小字里 */
+        .lib-spec-inline { display: inline; }
     }
 </style>
 
+{# 勾选后的操作条（专辑歌曲和未归位文件共用同一份勾选 picked） #}
+{% set pickbar %}
+<div class="org-actionbar lib-pickbar" x-show="picked.size">
+    <span class="org-sel-text">已选 <b class="ui-mono" x-text="picked.size"></b> 首</span>
+    {{ ui.btn('清空选择', 'secondary', size='sm', icon='x-circle', attrs={'@click': 'clearPicked()'}) }}
+    {{ ui.btn('移到别的专辑', 'secondary', size='sm', icon='folder-symlink', attrs={':disabled': 'scanning || cleaning', '@click': 'openMove()'}) }}
+    {{ ui.btn('移入回收站', 'danger', size='sm', icon='trash', attrs={':disabled': 'scanning || cleaning', '@click': 'trashPicked()'}) }}
+</div>
+{% endset %}
 <div x-data="organizePage()" x-cloak>
-    <!-- 1. 页头：标题 + 说明 + 删除模式徽章 -->
+    <!-- 1. 页头：标题 + 一行统计 + 重新扫描 -->
     <div class="page-head">
         <div>
-            <h1 class="page-title">整理</h1>
-            <p class="page-desc">扫描下载目录，找出重复的文件和同一首歌的多个音质版本，勾选后清理多余的。</p>
+            <h1 class="page-title">音乐库</h1>
+            <p class="page-desc" x-text="statsText()"></p>
         </div>
-        <span class="ui-badge" x-show="directDelete !== null"
-              :class="directDelete ? 'ui-badge-warning' : 'ui-badge-success'"
-              :title="directDelete ? '清理的文件将被永久删除，不会进入回收站' : '清理的文件移入下载目录下 .trash，可手动恢复'"
-              x-text="directDelete ? '永久删除模式' : '回收站模式'"></span>
-    </div>
-
-    <!-- 2. 统计卡：上次扫描 / 索引 / 重复组 / 可整理 / 最近清理 / 运行指示 -->
-    <div class="ui-card org-stats" x-show="loaded">
-        <div class="ui-card-body org-stats-row">
-            <div class="org-stat">
-                <span class="org-stat-label">上次扫描</span>
-                <span class="org-stat-value" x-text="lastScanText()" :title="lastScanText()"></span>
-            </div>
-            <div class="org-stat">
-                <span class="org-stat-label">索引文件</span>
-                <span class="org-stat-value ui-mono"
-                      :title="'共 ' + index.total + ' 个（缺失 ' + index.missing + '）'"
-                      x-text="index.active"></span>
-            </div>
-            <div class="org-stat">
-                <span class="org-stat-label">重复组</span>
-                <span class="org-stat-value ui-mono" x-text="groups.length"></span>
-            </div>
-            <div class="org-stat">
-                <span class="org-stat-label">可整理（推荐保留之外）</span>
-                <span class="org-stat-value">
-                    <span class="ui-mono" x-text="tidyCount"></span> 个 ·
-                    <span class="ui-mono" x-text="fmtSizeBytes(tidyBytes)"></span>
-                </span>
-            </div>
-            <div class="org-stat">
-                <span class="org-stat-label">最近清理</span>
-                <span class="org-stat-value" x-text="lastCleanText()" :title="lastCleanText()"></span>
-            </div>
+        <div class="page-actions">
+            {# 扫描/清理进行中只置灰：进度统一由下方任务进度卡显示，按钮不再转圈 #}
+            <button type="button" class="ui-btn ui-btn-secondary"
+                    :disabled="scanning || cleaning" @click="scan()">
+                <i class="bi bi-arrow-clockwise"></i>
+                <span>重新扫描</span>
+            </button>
         </div>
     </div>
 
-    <!-- 3. 扫描条 -->
-    <div class="org-scanbar">
-        {# 扫描/清理进行中只置灰：进度统一由下方任务进度卡显示，按钮不再转圈 #}
-        <button type="button" class="ui-btn ui-btn-primary"
-                :disabled="scanning || cleaning" @click="scan()">
-            <i class="bi bi-search"></i>
-            <span>扫描下载目录</span>
-        </button>
-        <span class="org-summary" x-show="loaded && scannedOnce && !scanning && !job">
-            共 <b class="ui-mono" x-text="index.active"></b> 个索引文件 ·
-            <b class="ui-mono" x-text="groups.length"></b> 组重复 ·
-            可整理 <b class="ui-mono" x-text="tidyCount"></b> 个
-        </span>
-    </div>
-
-    <!-- 4. 任务进度区（扫描/清理共用：已处理 processed/total + 进度条） -->
+    <!-- 2. 任务进度区（扫描/清理共用：已处理 processed/total + 进度条） -->
     <template x-if="job">
         <div class="ui-card org-jobbar">
             <span class="ui-spinner"></span>
@@ -136,12 +160,136 @@
         </div>
     </template>
 
-    <!-- 5. 空态 -->
-    <div x-show="loaded && !scannedOnce && !job && !groups.length">
-        {{ ui.empty('collection', '尚未扫描过，扫描下载目录以识别重复文件与多音质版本') }}
+    <!-- 3. 尚未扫描过 -->
+    <div x-show="loaded && !scannedOnce && !job">
+        {{ ui.empty('collection', '还没有扫描过下载目录，点「重新扫描」建立音乐库') }}
     </div>
-    <div class="org-empty-success" x-show="loaded && scannedOnce && !job && !groups.length">
-        {{ ui.empty('check2-circle', '未发现重复文件') }}
+
+    <!-- 4. 浏览 / 待处理 切换 -->
+    <div class="chips lib-views" x-show="loaded && scannedOnce">
+        <button type="button" class="chip" :class="{ active: view === 'browse' }" @click="setView('browse')">浏览</button>
+        <button type="button" class="chip" :class="{ active: view === 'pending' }" @click="setView('pending')">
+            待处理<span class="ui-mono" x-show="pendingCount()" x-text="' ' + pendingCount()"></span>
+        </button>
+    </div>
+
+    <!-- 5. 浏览：歌手 → 专辑 → 歌曲（data-level 决定手机上显示哪一层） -->
+    <div class="lib-browse" x-show="loaded && scannedOnce && view === 'browse'" :data-level="level()">
+        <!-- 5.1 歌手列表 -->
+        <div class="lib-artists">
+            <input type="search" class="ui-input" placeholder="找歌手" x-model="artistQuery" aria-label="找歌手">
+            <div class="lib-artist-list">
+                <template x-for="a in filteredArtists" :key="a.name">
+                    <button type="button" class="lib-artist" :class="{ 'is-on': artist && artist.name === a.name }"
+                            @click="openArtist(a)">
+                        <span class="lib-artist-name" x-text="a.name" :title="a.name"></span>
+                        <span class="lib-artist-count ui-mono" x-text="a.count"></span>
+                    </button>
+                </template>
+                <div class="lib-hint" x-show="!filteredArtists.length">没有找到这位歌手</div>
+            </div>
+        </div>
+
+        <!-- 5.2 右栏 -->
+        <div class="lib-main">
+            <div class="lib-hint" x-show="!artist">在左边选一位歌手</div>
+
+            <!-- 歌手：专辑 + 单曲 -->
+            <template x-if="artist && !album">
+                <div>
+                    <div class="lib-head">
+                        <button type="button" class="ui-btn ui-btn-secondary ui-btn-sm lib-back lib-back-artists"
+                                aria-label="返回全部歌手" @click="backToArtists()"><i class="bi bi-chevron-left"></i></button>
+                        <div class="lib-head-main">
+                            <div class="lib-head-title" x-text="artist.name"></div>
+                            <div class="lib-head-sub" x-text="artistSub(artist)"></div>
+                        </div>
+                    </div>
+
+                    <div class="list-card" x-show="artistAlbums.length">
+                        <template x-for="al in artistAlbums" :key="al.dir">
+                            <div class="list-row lib-row" @click="openAlbum(al)">
+                                <div class="list-main">
+                                    <div class="list-title"><span class="ui-truncate" x-text="al.name" :title="al.name"></span></div>
+                                    <div class="list-sub" x-text="albumSub(al)"></div>
+                                </div>
+                                <i class="bi bi-chevron-right lib-chev"></i>
+                            </div>
+                        </template>
+                    </div>
+
+                    <template x-if="artistSingles.length">
+                        <div>
+                            <button type="button" class="lib-fold" @click="singlesOpen = !singlesOpen"
+                                    :aria-expanded="singlesOpen ? 'true' : 'false'">
+                                <i class="bi" :class="singlesOpen ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                                <span x-text="'单曲 ' + artistSingles.length + ' 首'"></span>
+                            </button>
+                            <div class="list-card" x-show="singlesOpen">
+                                <template x-for="al in artistSingles" :key="al.dir">
+                                    <div class="list-row lib-row" @click="openAlbum(al)">
+                                        <div class="list-main">
+                                            <div class="list-title"><span class="ui-truncate" x-text="al.name" :title="al.name"></span></div>
+                                            <div class="list-sub" x-text="albumSub(al)"></div>
+                                        </div>
+                                        <i class="bi bi-chevron-right lib-chev"></i>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </template>
+
+            <!-- 专辑：歌曲列表 -->
+            <template x-if="artist && album">
+                <div>
+                    <div class="lib-head">
+                        <button type="button" class="ui-btn ui-btn-secondary ui-btn-sm lib-back"
+                                :aria-label="'返回 ' + artist.name" @click="backToArtist()"><i class="bi bi-chevron-left"></i></button>
+                        <div class="lib-head-main">
+                            <div class="lib-head-title" x-text="album.name"></div>
+                            <div class="lib-head-sub" x-text="albumDetailSub()"></div>
+                            <div class="lib-head-sub ui-mono" x-text="'文件夹：' + album.dir"></div>
+                        </div>
+                        {{ ui.btn('改专辑信息', 'secondary', size='sm', icon='pencil',
+                                  attrs={':disabled': 'albumLoading || scanning || cleaning', '@click': 'openEdit()'}) }}
+                    </div>
+                    <div class="lib-hint" x-show="albumLoading">加载中…</div>
+                    <div class="list-card" x-show="!albumLoading && album.items">
+                        <template x-for="it in (album.items || [])" :key="it.path">
+                            <label class="lib-song" :class="{ 'is-picked': picked.has(it.path) }">
+                                <span class="ui-check"><input type="checkbox" :checked="picked.has(it.path)"
+                                      @change="togglePick(it.path, $event.target.checked)" :aria-label="'选择：' + it.filename"></span>
+                                <span class="lib-track ui-mono" x-text="it.track || '—'"></span>
+                                <div class="lib-song-main">
+                                    <div class="lib-song-title" x-text="it.title || it.filename" :title="it.filename"></div>
+                                    <div class="lib-song-sub"><span x-text="it.artist"></span><span class="lib-spec-inline ui-mono"
+                                         x-text="(it.artist ? ' · ' : '') + formatSpec(it)"></span></div>
+                                </div>
+                                <span class="ui-badge" :class="it.lossless ? 'ui-badge-success' : 'ui-badge-muted'" x-text="formatSpec(it)"></span>
+                                <span class="org-meta lib-size ui-mono" x-text="fmtSizeBytes(it.size || null)"></span>
+                                <span class="org-meta lib-dur ui-mono" x-text="fmtDurationMs(it.duration_ms || null)"></span>
+                            </label>
+                        </template>
+                    </div>
+                    {{ pickbar }}
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- 6. 待处理：重复文件（原整理页功能原样搬入） -->
+    <div x-show="loaded && scannedOnce && view === 'pending'">
+    <h2 class="sec-title lib-sec-first">重复文件</h2>
+    <p class="lib-pending-sum" x-show="groups.length">
+        <b class="ui-mono" x-text="groups.length"></b> 组重复，推荐保留之外可整理
+        <b class="ui-mono" x-text="tidyCount"></b> 个文件，共 <b class="ui-mono" x-text="fmtSizeBytes(tidyBytes)"></b>。
+        清理的文件移入下载目录下的 .trash 回收站，可手动恢复。
+        <span x-text="'最近清理：' + lastCleanText()"></span>
+    </p>
+    <div class="org-empty-success" x-show="!job && !groups.length">
+        {{ ui.empty('check2-circle', '没有发现重复文件') }}
     </div>
 
     <!-- 清理结果卡（本次会话清理终态后持久显示，直至下次扫描/清理） -->
@@ -161,9 +309,7 @@
             <div class="ui-card-body">
                 <div class="org-result-sec">
                     <span class="ui-badge ui-badge-success">成功</span>
-                    <span><b class="ui-mono" x-text="result.ok"></b> 个文件
-                        （回收站 <b class="ui-mono" x-text="result.trashed"></b> /
-                        直删 <b class="ui-mono" x-text="result.deleted"></b>）</span>
+                    <span><b class="ui-mono" x-text="result.ok"></b> 个文件已移入回收站</span>
                     <span class="ui-badge ui-badge-danger" x-show="result.failed">
                         失败 <b class="ui-mono" x-text="result.failed"></b></span>
                 </div>
@@ -277,11 +423,48 @@
         </div>
     </template>
 
+    <!-- 6.2 未归位文件：不在「歌手/专辑/歌曲」三层结构里 -->
+    <h2 class="sec-title lib-pending-sec">未归位文件</h2>
+    <p class="lib-pending-sum" x-show="unplacedItems.length">
+        这些文件不在「歌手/专辑/歌曲」三层文件夹里，音乐库浏览里看不到。可以勾选后移到某张专辑，或移入回收站。
+    </p>
+    <div x-show="!unplacedItems.length">{{ ui.empty('check2-circle', '没有未归位的文件') }}</div>
+    <div class="list-card" x-show="unplacedItems.length">
+        <template x-for="it in unplacedItems" :key="it.path">
+            <label class="lib-song lib-un-row" :class="{ 'is-picked': picked.has(it.path) }">
+                <span class="ui-check"><input type="checkbox" :checked="picked.has(it.path)"
+                      @change="togglePick(it.path, $event.target.checked)" :aria-label="'选择：' + it.filename"></span>
+                <div class="lib-song-main">
+                    <div class="lib-song-title" x-text="it.filename" :title="it.rel"></div>
+                    <div class="lib-song-sub ui-mono" x-text="it.rel"></div>
+                    <div class="lib-song-sub lib-problem" x-show="it.problem" x-text="'文件有问题：' + it.problem"></div>
+                </div>
+                <span class="ui-badge" :class="it.problem ? 'ui-badge-danger' : 'ui-badge-muted'" x-text="it.problem ? '有问题' : formatSpec(it)"></span>
+                <span class="org-meta lib-size ui-mono" x-text="fmtSizeBytes(it.size)"></span>
+            </label>
+        </template>
+    </div>
+    {{ pickbar }}
+
+    <!-- 6.3 空文件夹 -->
+    <h2 class="sec-title lib-pending-sec">空文件夹</h2>
+    <div x-show="!emptyDirs.length">{{ ui.empty('check2-circle', '没有空文件夹') }}</div>
+    <div class="list-card" x-show="emptyDirs.length">
+        <div class="lib-dirlist">
+            <template x-for="d in emptyDirs" :key="d">
+                <div class="org-filelist-row ui-mono" x-text="d"></div>
+            </template>
+        </div>
+    </div>
+    <div class="org-actionbar lib-pickbar" x-show="emptyDirs.length">
+        <span class="org-sel-text"><b class="ui-mono" x-text="emptyDirs.length"></b> 个文件夹里一个文件都没有</span>
+        {{ ui.btn('全部删掉', 'danger', size='sm', icon='trash', attrs={':disabled': 'scanning || cleaning', '@click': 'removeEmptyDirs()'}) }}
+    </div>
+    </div>
+
     {# 清理确认 Modal（Alpine store 'modals' 控制显隐；动态文本全走 x-text 免转义） #}
     {% set clean_body %}
-    <p x-text="directDelete
-        ? '当前为永久删除模式：所选文件将被直接删除，不可恢复。'
-        : '当前为回收站模式：所选文件将移入下载目录下 .trash，可手动恢复。'"></p>
+    <p>所选文件将移入下载目录下的 .trash 回收站，可手动恢复。</p>
     <p>将处理 <b class="ui-mono" x-text="selectedCount"></b> 个文件 ·
        预计释放 <b class="ui-mono" x-text="fmtSizeBytes(freedBytes)"></b></p>
     <div class="org-filelist">
@@ -300,6 +483,101 @@
             @click="confirmClean()"></button>
     {% endset %}
     {{ ui.modal('clean', '确认清理所选文件', clean_body, clean_footer) }}
+
+    {# 改动预览（改专辑信息、移动歌曲共用）：逐个文件列出标签和位置怎么变 #}
+    {% set change_preview %}
+    <template x-if="edit.stage === 'preview' && edit.preview">
+        <div>
+            <div class="lib-pv-sum">
+                <span>改标签 <b class="ui-mono" x-text="previewCount('tags')"></b> 首</span>
+                <span>挪动 <b class="ui-mono" x-text="previewCount('moved')"></b> 首</span>
+                <span>跳过 <b class="ui-mono" x-text="previewCount('skip')"></b> 首</span>
+            </div>
+            <div class="lib-pv-sum" x-show="edit.preview.new_dir !== edit.fromDir">
+                <span x-text="edit.mode === 'move' ? '移到：' : '新文件夹：'"></span><span><b class="ui-mono" x-text="edit.preview.new_dir"></b></span>
+            </div>
+            <div class="lib-pv-list">
+                <template x-for="pl in edit.preview.plans" :key="pl.from">
+                    <div class="lib-pv-item">
+                        <div><b x-text="fileName(pl.from)"></b></div>
+                        <template x-for="t in pl.tags" :key="t.key">
+                            <div x-text="tagLabel(t.key) + '：' + (t.old || '（空）') + ' → ' + (t.new || '（删掉）')"></div>
+                        </template>
+                        <div class="ui-mono" x-show="pl.moved && !pl.skip" x-text="'位置：' + pl.from + ' → ' + pl.to"></div>
+                        <div class="lib-pv-skip" x-show="pl.skip" x-text="'跳过：' + pl.skip"></div>
+                        <div x-show="!pl.skip && !pl.moved && !pl.tags.length">没有变化</div>
+                    </div>
+                </template>
+            </div>
+            <p class="lib-pv-note">不会覆盖任何已有文件；下载记录里的文件位置会一起更新。</p>
+        </div>
+    </template>
+    {% endset %}
+
+    {# 改专辑信息：stage=form 填表 → preview 逐个文件看改动 → 确认执行 #}
+    {% set edit_body %}
+    <div x-show="edit.stage === 'form'">
+        <label class="lib-label">专辑名
+            <input type="text" class="ui-input" x-model="edit.album">
+        </label>
+        <label class="lib-label">专辑歌手
+            <input type="text" class="ui-input" x-model="edit.albumartist">
+        </label>
+        <label class="lib-label">年份（四位数字，可留空）
+            <input type="text" class="ui-input" inputmode="numeric" maxlength="4" x-model="edit.year">
+        </label>
+        <label class="lib-check">
+            <span class="ui-check"><input type="checkbox" x-model="edit.moveFolder"></span>
+            <span>文件夹跟着改名
+                <small>改了专辑名或年份，专辑文件夹跟着改；改了专辑歌手，挪到新歌手的文件夹下（同名专辑会合到一起）。</small>
+            </span>
+        </label>
+    </div>
+    {{ change_preview }}
+    <div class="lib-err" x-show="edit.error" x-text="edit.error"></div>
+    {% endset %}
+    {% set edit_footer %}
+    <template x-if="edit.stage === 'form'">
+        <div class="ui-row-actions">
+            {{ ui.btn('取消', 'secondary', attrs={'@click': 'closeChange()'}) }}
+            {{ ui.btn('预览改动', 'primary', attrs={':disabled': '!!edit.busy', ':class': "{ 'is-loading': edit.busy }", '@click': 'previewEdit()'}) }}
+        </div>
+    </template>
+    <template x-if="edit.stage === 'preview'">
+        <div class="ui-row-actions">
+            {{ ui.btn('返回修改', 'secondary', attrs={':disabled': '!!edit.busy', '@click': "edit.stage = 'form'"}) }}
+            {{ ui.btn('确认执行', 'primary', attrs={':disabled': '!!(edit.busy || !previewDoable())', ':class': "{ 'is-loading': edit.busy }", '@click': 'applyEdit()'}) }}
+        </div>
+    </template>
+    {% endset %}
+    {{ ui.modal('albumEdit', '改专辑信息', edit_body, edit_footer) }}
+
+    {# 移到别的专辑：选目标专辑 → 预览 → 确认执行（页脚和改专辑信息共用） #}
+    {% set move_body %}
+    <div x-show="edit.stage === 'form'">
+        <label class="lib-label">移到哪张专辑
+            <input type="search" class="ui-input" placeholder="搜歌手或专辑名" x-model="edit.targetQuery">
+        </label>
+        <div class="lib-targets">
+            <template x-for="t in moveTargets" :key="t.dir">
+                <button type="button" class="lib-target" :class="{ 'is-on': edit.target === t.dir }" @click="edit.target = t.dir">
+                    <span x-text="t.name"></span>
+                    <small x-text="t.sub"></small>
+                </button>
+            </template>
+            <div class="lib-hint" x-show="!moveTargets.length">没有找到</div>
+        </div>
+        <label class="lib-check">
+            <span class="ui-check"><input type="checkbox" x-model="edit.retag"></span>
+            <span>标签也改成这张专辑的
+                <small>专辑名、专辑歌手、年份改成和目标专辑一样；歌名、歌手、曲序、封面不动。</small>
+            </span>
+        </label>
+    </div>
+    {{ change_preview }}
+    <div class="lib-err" x-show="edit.error" x-text="edit.error"></div>
+    {% endset %}
+    {{ ui.modal('songMove', '移到别的专辑', move_body, edit_footer) }}
 </div>
 {% endblock %}
 

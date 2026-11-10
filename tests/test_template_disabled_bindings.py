@@ -35,8 +35,6 @@ def _is_safe(expr: str) -> bool:
         return True                      # Set.has 必返回布尔
     if e.startswith(_KNOWN_BOOL_CALLS) and "||" not in e:
         return True
-    if e == "migrate.busy":
-        return True                      # settings.js 初始化为 false
     return False
 
 

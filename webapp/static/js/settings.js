@@ -10,9 +10,6 @@
 //                                         "both" = 歌单同步+搜索下载）
 //   PUT    /api/settings                  全量提交（对齐现状：键全集非增量；
 //                                         端口钳制/档位重置/重启提示由后端拼进 msg 经 toast 透传）
-//   GET    /api/settings/migrate-layout   {needs} 目录结构待迁移数量（needs>0 显示提示条）
-//   POST   /api/settings/migrate-layout   执行迁移（移动用户文件 → uiConfirm 显式确认；
-//                                         文件较多耗时较长 → timeout 120s）
 //   GET    /api/{ncm|qq|kugou}/status     内置 API 服务状态（timeout 5s；失败保留上次状态）
 //                                         服务由程序自动启动，页面不提供启停
 //
@@ -57,7 +54,7 @@ function settingsPage() {
     return {
         // ---- 唯一状态入口 ----
         serviceList: SERVICE_DEFS,
-        form: {},                 // loadSettings() 全量回填（含 organize_direct_delete）
+        form: {},                 // loadSettings() 全量回填
         // 访问令牌（不进 form/全量 payload：独立接口保存，后端永不回显明文）
         tokenState: { enabled: false, fromEnv: false, input: "", busy: false },
         loading: true,
@@ -65,7 +62,6 @@ function settingsPage() {
         section: "accounts",      // 当前分类（hash 记忆，刷新/直达不丢）；账号栏是独立组件 accountsPage
         _savedSnapshot: "",       // 回填后的 payload 快照（isDirty 比较）
         // 目录结构迁移：needs=null 检测中/隐藏提示条；>0 显示提示条
-        migrate: { needs: null, busy: false },
         services: { ncm: blankSvcState(), qq: blankSvcState(), kugou: blankSvcState() },
         _pollTimer: null,         // 三服务状态轮询（组件内唯一 timer）
         apiOpen: false,           // 「常规 → 高级：API 服务」折叠区是否展开（默认收起）
@@ -90,7 +86,6 @@ function settingsPage() {
             // 3s 轮询三服务状态（只在折叠区展开时请求；页面在后台时也跳过）
             this._pollTimer = setInterval(() => this.pollSvcStatuses(), 3000);
             await this.loadSettings();
-            this.refreshMigrateHint();
         },
         // 组件销毁兜底清理（页面整页跳转无需，SPA 式复用时防 timer 泄漏）
         destroy() {
@@ -136,7 +131,7 @@ function settingsPage() {
             }
         },
 
-        // GET data → 表单状态（与旧页逐字段同语义；新增 organize_direct_delete）
+        // GET data → 表单状态（与旧页逐字段同语义）
         applySettings(s) {
             // exclude_scope 兼容旧值："both" = 歌单同步 + 搜索下载
             const rawScope = s.exclude_scope || "playlist,search";
@@ -167,7 +162,6 @@ function settingsPage() {
                 exclude_keywords: s.exclude_keywords || "",
                 scope_playlist: scopes.includes("playlist"),
                 scope_search: scopes.includes("search"),
-                organize_direct_delete: s.organize_direct_delete === "true",
                 // 目录结构
                 dir_layout: s.dir_layout || "artist_album",
                 // 音质（后端未单独设置 level_<p> 时已回填旧全局 level）
@@ -217,7 +211,6 @@ function settingsPage() {
                 default_playlist_limit: txt(f.default_playlist_limit),
                 exclude_keywords: txt(f.exclude_keywords),
                 exclude_scope: scope.join(","),
-                organize_direct_delete: flag(f.organize_direct_delete),
                 dir_layout: f.dir_layout,
                 level_netease: f.level_netease,
                 level_qq: f.level_qq,
@@ -269,39 +262,6 @@ function settingsPage() {
                 showToast(e.message, "错误", "error");
             } finally {
                 this.saving = false;
-            }
-        },
-
-        // ============================================================
-        // 目录结构存量迁移
-        // ============================================================
-        async refreshMigrateHint() {
-            try {
-                const data = await api("/api/settings/migrate-layout");
-                this.migrate.needs = (data.data && data.data.needs) || 0;
-            } catch (e) {
-                this.migrate.needs = 0;   // 检测失败不打扰用户
-            }
-        },
-
-        // 手动触发迁移（移动用户文件必须显式确认，不做自动迁移；幂等可重复）
-        async runMigrate() {
-            if (this.migrate.busy) return;
-            const ok = await uiConfirm({
-                title: "迁移到「歌手 / 专辑」结构",
-                message: "将把已下载的存量文件搬入「歌手 / 专辑」目录。只搬位置不改文件名，已在原地的自动跳过；文件较多时可能耗时较长。",
-                confirmText: "开始迁移",
-            });
-            if (!ok) return;
-            this.migrate.busy = true;
-            try {
-                const data = await api("/api/settings/migrate-layout", { method: "POST", timeout: 120000 });
-                showToast(data.msg, "迁移", "success");
-                this.refreshMigrateHint();   // 全部归位则提示条消失
-            } catch (e) {
-                showToast(e.message, "错误", "error");
-            } finally {
-                this.migrate.busy = false;
             }
         },
 

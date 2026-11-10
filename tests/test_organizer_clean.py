@@ -15,9 +15,8 @@
     行 status="trashed"；同名冲突走时间戳后缀
 5b. test_move_to_trash_timestamp_and_sequence_suffix
     _move_to_trash 单元：时间戳分支 + 同秒冲突 _N 序号分支（冻结时钟）
-6.  test_clean_direct_mode_unlinks_marks_cleaned
-    直删模式（organize_direct_delete="true"）→ 文件消失、行 "cleaned"、
-    trash_dest NULL、result 计 deleted
+6.  test_clean_ignores_legacy_direct_delete_setting
+    旧库残留 organize_direct_delete="true" 也一律进回收站
 7.  test_clean_partial_counts_in_result
     单文件失败 + 部分成功 → job=partial、result 计数正确
 8.  test_clean_rows_not_active_afterwards
@@ -274,7 +273,7 @@ def test_clean_trash_repairs_song_and_keeps_quality(manager, tmp_path,
     assert job.progress == 100
     result = _result(job)
     assert result["total"] == 1
-    assert result["trashed"] == 1 and result["deleted"] == 0
+    assert result["trashed"] == 1
     assert result["failed"] == 0
     assert result["songs_repaired"] == 1 and result["songs_cleared"] == 0
     rep = result["repaired"][0]
@@ -443,12 +442,12 @@ def test_move_to_trash_timestamp_and_sequence_suffix(webapp_app, tmp_path,
 
 
 # ======================================================================
-# 6. 直删模式：unlink、行 cleaned、trash_dest NULL
+# 6. 旧库残留的直删设置不再生效：一律进回收站
 # ======================================================================
-def test_clean_direct_mode_unlinks_marks_cleaned(manager, tmp_path,
-                                                 fake_audio_factory):
+def test_clean_ignores_legacy_direct_delete_setting(manager, tmp_path,
+                                                    fake_audio_factory):
     out_dir = _setup_out_dir(tmp_path)
-    Setting.set("organize_direct_delete", "true")
+    Setting.set("organize_direct_delete", "true")   # 旧版设置页留下的值
     dup = _make_audio(out_dir, "晴天-12345.mp3", size=100)
     fake_audio_factory(tags={"title": "晴天"})
     _scan(manager)
@@ -457,14 +456,12 @@ def test_clean_direct_mode_unlinks_marks_cleaned(manager, tmp_path,
 
     assert job.status == "success"
     assert not dup.exists()
-    assert not (out_dir / ".trash").exists()        # 不产生回收站目录
     item = _items(job.id)[0]
     assert item.status == "success"
-    assert item.trash_dest is None                  # 直删无回收站落点
-    assert item.finished_at is not None
-    assert _row(dup).status == "cleaned"
+    assert Path(item.trash_dest).exists()           # 文件在回收站里
+    assert _row(dup).status == "trashed"
     result = _result(job)
-    assert result["deleted"] == 1 and result["trashed"] == 0
+    assert result["trashed"] == 1 and "deleted" not in result
 
 
 # ======================================================================
@@ -485,7 +482,6 @@ def test_clean_partial_counts_in_result(manager, tmp_path,
     result = _result(job)
     assert result["total"] == 3
     assert result["trashed"] == 2
-    assert result["deleted"] == 0
     assert result["failed"] == 1
     assert job.processed == 3 and job.total == 3
     assert job.progress == 100

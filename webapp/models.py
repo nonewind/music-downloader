@@ -291,7 +291,7 @@ class OrganizerCleanItem(db.Model):
         绝对路径，但未强制 resolve 归一）
     keep_path: repair 保留路径，可空（无 repair 意图即为 NULL）
     status: pending | success | failed（逐文件执行前重验 + 执行结果）
-    trash_dest: 实际落入 .trash 的路径，直删（organize_direct_delete）为 NULL
+    trash_dest: 实际落入 .trash 的路径（旧版直删模式的行为 NULL）
     finished_at: 该文件处理完成时刻（成功/失败均写，中断安全：每文件处理后
         立即 commit，已成功项的落盘事实先落库）
     """
@@ -433,8 +433,6 @@ DEFAULT_SETTINGS = {
     "exclude_keywords": "",
     # 排除过滤应用范围：逗号分隔，如 "playlist,search"（两者都应用）/ "playlist" / "search" / ""（都不应用）
     "exclude_scope": "playlist,search",
-    # 音乐整理：清理重复文件时是否直接删除（false=移入下载目录 .trash 回收站）
-    "organize_direct_delete": "false",
 }
 
 

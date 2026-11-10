@@ -322,6 +322,31 @@ def write_tags(file_path: Path, meta: dict,
     return False
 
 
+def update_tags(file_path: Path, changes: dict[str, str]) -> None:
+    """只改给定的几项标签，别的标签和封面都不碰（音乐库改专辑信息用）
+
+    write_tags 会按整套元数据重写（没给封面地址就把封面清掉、没给年份就删
+    年份），不能拿来改单项。这里用 mutagen 的 easy 键名（album /
+    albumartist / date …），FLAC/OGG/MP3/M4A 写法一致。
+
+    Args:
+        changes: {easy 键名: 新值}；新值为空串表示删掉这一项
+
+    读写失败直接抛出，由调用方记成这一首失败。
+    """
+    audio = MutagenFile(str(file_path), easy=True)
+    if audio is None:
+        raise ValueError("不是能识别的音频文件")
+    if audio.tags is None:
+        audio.add_tags()
+    for key, value in changes.items():
+        if value:
+            audio[key] = value
+        elif key in audio:
+            del audio[key]
+    audio.save()
+
+
 def _as_int(value) -> int:
     """宽容整型转换（None/脏数据 → 0，0=不写入该字段）"""
     try:

@@ -45,7 +45,7 @@ def history():
 
 @views_bp.route("/organize")
 def organize():
-    """整理页"""
+    """音乐库页（原整理页，地址不变）"""
     return render_template("organize.html", active_page="organize")
 
 

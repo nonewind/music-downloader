@@ -36,7 +36,6 @@ from models import (
     LocalAudioFile,
     OrganizerCleanItem,
     OrganizerJob,
-    Setting,
     Song,
     db,
 )
@@ -494,7 +493,7 @@ class OrganizerManager:
     # 清理核心（ORG-03）
     # ------------------------------------------------------------------
     def _execute_clean(self, job) -> str:
-        """核心清理：逐文件重验 + 删除（回收站/直删）+ Song 关联修复
+        """核心清理：逐文件重验 + 移入回收站+ Song 关联修复
 
         调用方（run_job）须已持有 app context 且已认领 job。返回终态字符串
         （success / partial / failed）交由 run_job 落库；步骤级意外异常（如读
@@ -514,7 +513,6 @@ class OrganizerManager:
         out_dir = self._resolve_output_dir()
         if not out_dir.is_dir():
             raise ValueError("下载目录不存在")
-        direct = Setting.get("organize_direct_delete", "false") == "true"
 
         # 惰性导入（函数内）：routes.api 只在请求/执行期反向使用本模块的
         # OrganizerBusyError 等符号，模块级互相 import 会成环；这层依赖是
@@ -532,7 +530,7 @@ class OrganizerManager:
         job.total = len(items)
         db.session.commit()
 
-        deleted = trashed = n_failed = 0
+        trashed = n_failed = 0
         first_error = None
         for idx, item in enumerate(items, 1):
             # 执行前重验：白名单（在下载目录内、不在 .trash、存在且是文件）
@@ -544,12 +542,9 @@ class OrganizerManager:
                 first_error = first_error or reason
                 n_failed += 1
             else:
-                trash_dest = None
+                # 一律移入回收站（硬盘没有备份，删错还能找回）
                 try:
-                    if direct:
-                        path.unlink()
-                    else:
-                        trash_dest = _move_to_trash(path, out_dir)
+                    trash_dest = _move_to_trash(path, out_dir)
                 except OSError as e:
                     item.status = "failed"
                     item.error_msg = str(e)[:400]
@@ -558,12 +553,9 @@ class OrganizerManager:
                     n_failed += 1
                 else:
                     item.status = "success"
-                    item.trash_dest = str(trash_dest) if trash_dest else None
+                    item.trash_dest = str(trash_dest)
                     item.finished_at = datetime.now()
-                    if trash_dest:
-                        trashed += 1
-                    else:
-                        deleted += 1
+                    trashed += 1
                     # 索引行联动（无行不报错：未扫描过的文件也能清）。
                     # 以校验后的 resolve 路径匹配（walk 产物即 resolve 路径），
                     # 兜底再按原始提交路径找一次。
@@ -571,7 +563,7 @@ class OrganizerManager:
                     if row is None and str(path) != item.path:
                         row = LocalAudioFile.query.filter_by(path=item.path).first()
                     if row is not None:
-                        row.status = "trashed" if trash_dest else "cleaned"
+                        row.status = "trashed"
             # 进度随本 item 的结果一并立即 commit（中断安全）
             job.processed = idx
             job.progress = idx * 100 // job.total if job.total else 100
@@ -626,7 +618,6 @@ class OrganizerManager:
 
         result = {
             "total": len(items),
-            "deleted": deleted,
             "trashed": trashed,
             "failed": n_failed,
             "repaired": repaired,
@@ -637,7 +628,7 @@ class OrganizerManager:
         job.result = json.dumps(result, ensure_ascii=False)
         if n_failed == 0:
             return "success"
-        if deleted + trashed == 0:
+        if trashed == 0:
             job.error_msg = (first_error or "清理全部失败")[:2000]
             return "failed"
         return "partial"

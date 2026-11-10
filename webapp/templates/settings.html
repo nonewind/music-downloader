@@ -77,8 +77,6 @@
     .set-url { flex: 1 1 240px; max-width: 400px; }
 
     /* 旧结构文件迁移提示条 */
-    .set-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .08); border-radius: var(--ui-r-s); font-size: 13px; color: var(--ui-text); }
-    .set-banner .ui-btn { margin-left: auto; }
 
     /* 保存栏：sticky 常驻底部，跨分类可见 */
     /* 保存：只有按钮（和未保存提示）悬浮在右下角，后面不垫整条白栏；
@@ -348,15 +346,6 @@
                                     <option value="artist">歌手 / 歌曲名（旧版结构）</option>
                                 </select>
                                 <div class="set-hint">新结构下文件名为「歌名-歌曲ID」；单曲无专辑名时用歌名当专辑目录；切换只影响新下载</div>
-                                {# 旧结构文件检测提示条：有存量才显示迁移入口（移动用户文件须 uiConfirm 显式确认） #}
-                                <div class="set-banner" x-show="migrate.needs !== null && migrate.needs > 0">
-                                    <i class="bi bi-exclamation-triangle"></i>
-                                    <span x-text="'检测到 ' + migrate.needs + ' 个旧结构文件未迁移'"></span>
-                                    {{ ui.btn('迁移到「歌手 / 专辑」结构', 'primary', size='sm', icon='folder-symlink',
-                                              attrs={':disabled': 'migrate.busy',
-                                                     ':class': "{ 'is-loading': migrate.busy }",
-                                                     '@click': 'runMigrate()'}) }}
-                                </div>
                             </div>
                         </div>
                     </div>
@@ -464,13 +453,6 @@
                                 </div>
                                 <div class="set-hint">单首下载不受此限制（尊重用户主动选择）</div>
                             </div>
-                            {# v0.7.8.0 后端已默认 organize_direct_delete，此开关补齐设置页 UI #}
-                            <label class="set-check">
-                                <span class="ui-check"><input type="checkbox" x-model="form.organize_direct_delete"></span>
-                                <span class="set-checktext">音乐整理删除模式
-                                    <small>整理页清理重复文件时：开启=直接删除（不可恢复）；关闭=移入下载目录 .trash 回收站（可手动恢复，默认）</small>
-                                </span>
-                            </label>
                         </div>
                     </div>
                 </div>

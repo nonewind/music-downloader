@@ -173,6 +173,51 @@ def build_entry(path: Path, ext: str) -> FileEntry:
     )
 
 
+# 音乐库现读的几项标签（easy=True 下 FLAC/OGG/MP3/M4A 键名一致）
+EASY_TAG_KEYS = ("album", "albumartist", "date", "tracknumber")
+
+
+def read_easy_tags(path: Path) -> dict[str, str]:
+    """现读一个文件的专辑、专辑歌手、日期、曲序（索引里不存后三项）
+
+    文件读不了（坏文件、改了扩展名的文件）时与 build_entry 一样只记警告。
+
+    Returns:
+        {键: 文本}，只含读到的非空项；读不了返回空 dict
+    """
+    try:
+        audio = MutagenFile(str(path), easy=True)
+    except Exception as e:
+        logger.warning("读取标签失败 %s: %s", path, e)
+        return {}
+    if audio is None or audio.tags is None:
+        return {}
+    tags = {}
+    for key in EASY_TAG_KEYS:
+        values = audio.tags.get(key)
+        if values:
+            text = str(values[0]).strip()
+            if text:
+                tags[key] = text
+    return tags
+
+
+def track_no_of(tags: dict[str, str]) -> int:
+    """曲序：形如 "3" 或 "3/12"，取不到为 0"""
+    head = tags.get("tracknumber", "").split("/")[0].strip()
+    if head.isdigit():
+        return int(head)
+    return 0
+
+
+def year_of(tags: dict[str, str]) -> str:
+    """年份：日期开头的四位数字，取不到为空串"""
+    date = tags.get("date", "")
+    if len(date) >= 4 and date[:4].isdigit():
+        return date[:4]
+    return ""
+
+
 def _raise_walk_error(err: OSError) -> None:
     """os.walk onerror 回调：目录 scandir 失败（权限不足等）立即抛出。
 
