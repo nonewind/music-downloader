@@ -273,8 +273,10 @@ body.has-dlbar .app-dlbar {
     font-size: 15px;
 }
 
-.app-dlbar-title { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-dlbar-side { color: #d5d7db; white-space: nowrap; flex-shrink: 0; }
+/* 左边整批进度很短，不让它被挤；右边歌名太长时省略号截断 */
+.app-dlbar-title { font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.app-dlbar-side { color: #d5d7db; white-space: nowrap; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.app-dlbar-song { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .app-dlbar-fail { color: #ffb59e; font-weight: 600; }
 
 .app-dlbar-prog {

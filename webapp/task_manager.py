@@ -658,6 +658,9 @@ class TaskManager:
         # 存在一个窗口，只按"当前任务"比对会把落在窗口内的暂停/删除请求丢掉。
         self._abort: dict[int, str] = {}
         self._pause_all = False
+        # 「这一批」见过的任务 pk：队列从空变成有任务算一批开始，清空算结束。
+        # 下载条用它算整批进度（已完成 / 总数）；只在内存里，重启后从头算
+        self._batch_pks: set[int] = set()
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -2217,6 +2220,9 @@ class TaskManager:
                 self._clear_abort(pk)
             DownloadTask.query.filter(DownloadTask.pk == pk).delete(synchronize_session=False)
             db.session.commit()
+        # 删掉的歌不算这一批「已完成」，直接从这一批里去掉（总数跟着减）
+        with self._control_lock:
+            self._batch_pks.discard(pk)
         logger.info("任务已删除: pk=%s (原状态 %s)", pk, status)
         return True, "已删除任务"
 
@@ -2292,6 +2298,24 @@ class TaskManager:
                 d["account_name"] = names.get(t.account_id)
                 result.append(d)
             return result
+
+    def batch_counts(self, active_pks: list[int]) -> tuple[int, int]:
+        """这一批的（已完成数, 总数）。
+
+        每次查活跃任务时调用：把当前活跃任务并进这一批；活跃任务为空说明
+        这一批结束，清空重来。已完成 = 这一批里已经不在活跃列表里的任务
+        （下完、失败、跳过或被删都算）。
+        """
+        with self._control_lock:
+            # 第 1 步：队列空了，这一批结束
+            if not active_pks:
+                self._batch_pks = set()
+                return 0, 0
+            # 第 2 步：并入当前活跃任务，再数已经离开队列的
+            self._batch_pks |= set(active_pks)
+            total = len(self._batch_pks)
+            done = total - len(active_pks)
+            return done, total
 
     def refresh_schedule(self) -> None:
         self._refresh_schedule()

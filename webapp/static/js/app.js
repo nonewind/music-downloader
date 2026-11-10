@@ -151,7 +151,8 @@ async function refreshGlobalTaskStatus() {
         }
 
         // 第 2 步：渲染下载条和失败角标
-        renderDlbar(tasks, pausedAll, failedCount);
+        const batch = { done: data.batch_done, total: data.batch_total };
+        renderDlbar(tasks, pausedAll, failedCount, batch);
 
         // 第 3 步：广播队列变化，让页面刷新自己的行状态
         broadcastQueueChange(tasks, pausedAll);
@@ -188,8 +189,9 @@ function broadcastQueueChange(tasks, pausedAll) {
 // ============================================================
 // 底部下载条 + 导航失败角标（由 refreshGlobalTaskStatus 每 2 秒驱动）
 // ============================================================
-// 下载条只在有任务时出现：左边是正在下的歌和进度，右边是排队数和失败数
-function renderDlbar(tasks, pausedAll, failedCount) {
+// 下载条只在有任务时出现：左边是这一批的整体进度（已完成 / 总数），
+// 右边是正在下的歌名和失败数；进度条按整批算，当前这首的进度也折算进去
+function renderDlbar(tasks, pausedAll, failedCount, batch) {
     // 第 1 步：导航上的失败角标
     const badge = document.getElementById("navFailBadge");
     const badgeNum = document.getElementById("navFailNum");
@@ -208,39 +210,44 @@ function renderDlbar(tasks, pausedAll, failedCount) {
         return;
     }
 
-    // 第 3 步：左边标题和进度
+    // 第 3 步：整批进度 = (已完成数 + 当前这首的进度) / 总数
     const downloading = tasks.find(t => t.status === "downloading");
-    const nPending = tasks.filter(t => t.status === "pending").length;
     const nPaused = tasks.filter(t => t.status === "paused").length;
+    let songPart = 0;
+    if (downloading) {
+        songPart = Math.max(0, Math.min(100, downloading.progress)) / 100;
+    }
+    const pct = Math.floor((batch.done + songPart) / batch.total * 100);
+    const countText = "已完成 " + batch.done + " / " + batch.total + " 首";
+
+    // 第 4 步：左边标题
     let titleText = "";
-    let pct = 0;
     if (pausedAll) {
-        titleText = "已全部暂停";
-    } else if (downloading) {
-        pct = Math.max(0, Math.min(100, downloading.progress || 0));
-        titleText = "正在下载 " + downloading.song_name + " · " + pct + "%";
-    } else if (nPending > 0) {
-        titleText = "排队中 " + nPending + " 首";
+        titleText = "已全部暂停 · " + countText;
+    } else if (!downloading && nPaused === tasks.length) {
+        titleText = "已暂停 " + nPaused + " 首 · " + countText;
     } else {
-        titleText = "已暂停 " + nPaused + " 首";
+        titleText = countText + " · " + pct + "%";
     }
     title.textContent = titleText;
     prog.style.width = pct + "%";
 
-    // 第 4 步：右边的排队数和失败数
+    // 第 5 步：右边是正在下的歌名（太长时省略）和失败数
     side.textContent = "";
-    const segs = [];
-    if (downloading && nPending > 0) segs.push("还有 " + nPending + " 首排队");
-    if (!pausedAll && downloading && nPaused > 0) segs.push("暂停 " + nPaused + " 首");
-    side.appendChild(document.createTextNode(segs.join(" · ")));
+    if (!pausedAll && downloading) {
+        const song = document.createElement("span");
+        song.className = "app-dlbar-song";
+        song.textContent = "正在下 " + downloading.song_name;
+        side.appendChild(song);
+    }
     if (failedCount > 0) {
-        if (segs.length) side.appendChild(document.createTextNode(" · "));
+        if (side.childNodes.length) side.appendChild(document.createTextNode("·"));
         const fail = document.createElement("span");
         fail.className = "app-dlbar-fail";
         fail.textContent = failedCount + " 首失败";
         side.appendChild(fail);
     }
-    side.appendChild(document.createTextNode(" ›"));
+    side.appendChild(document.createTextNode("›"));
 
     document.body.classList.add("has-dlbar");
 }

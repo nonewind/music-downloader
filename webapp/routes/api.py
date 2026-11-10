@@ -865,12 +865,18 @@ def get_tasks():
         failed_count: 失败记录数（只计 kind=normal，口径与下载页失败重试栏
                     的 /api/songs?status=failed&kind=normal 一致），供每个页面
                     的导航角标和底部下载条显示
+        batch_done / batch_total: 这一批已完成数和总数，底部下载条显示整批进度
     """
     tm = _get_task_manager()
     failed_count = DownloadTask.query.filter_by(status="failed", kind="normal").count()
+    tasks = tm.get_active_tasks()
+    active_pks = [t["pk"] for t in tasks]
+    batch_done, batch_total = tm.batch_counts(active_pks)
     return jsonify({
         "code": 0,
-        "data": tm.get_active_tasks(),
+        "data": tasks,
+        "batch_done": batch_done,
+        "batch_total": batch_total,
         "paused_all": tm.is_globally_paused(),
         "has_active": tm.has_active_task(),
         "failed_count": failed_count,

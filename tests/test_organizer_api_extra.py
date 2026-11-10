@@ -120,6 +120,41 @@ def test_api_tasks_active_only_without_file_state(api_client):
     assert all("file_state" not in t for t in data)
 
 
+def test_api_tasks_batch_counts(api_client):
+    """下载条整批进度：下完的算已完成，中途加的算进总数，
+    删掉的从总数里去掉，队列清空后从头算。"""
+    def counts():
+        body = api_client.get("/api/tasks").get_json()
+        return body["batch_done"], body["batch_total"]
+
+    # 第 1 步：一批 3 首
+    t1 = _add_task("downloading", song_id="1")
+    t2 = _add_task("pending", song_id="2")
+    t3 = _add_task("pending", song_id="3")
+    assert counts() == (0, 3)
+
+    # 第 2 步：下完一首，再临时加一首
+    t1.status = "done"
+    db.session.commit()
+    t4 = _add_task("pending", song_id="4")
+    assert counts() == (1, 4)
+
+    # 第 3 步：删掉一首排队中的，不算已完成
+    ok, _ = api_client.application.config["TASK_MANAGER"].delete_task(t3.pk)
+    assert ok
+    assert counts() == (1, 3)
+
+    # 第 4 步：剩下的都下完，队列清空，这一批结束
+    for t in (t2, t4):
+        t.status = "done"
+    db.session.commit()
+    assert counts() == (0, 0)
+
+    # 第 5 步：新的一批从头算
+    _add_task("pending", song_id="5")
+    assert counts() == (0, 1)
+
+
 # ======================================================================
 # 2. 旧库兼容：最小旧 schema → init_db → organizer 三新表 + 旧行完好
 # ======================================================================
