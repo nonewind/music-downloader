@@ -516,16 +516,18 @@ function organizePage() {
         },
 
         // ============================================================
-        // 改专辑信息 / 移到别的专辑（填表 → 预览 → 确认执行；
-        // 预览和执行后端走同一份计划，两个弹窗共用 edit 状态和预览、页脚）
+        // 改专辑信息 / 移到别的专辑 / 按标签归位（填表 → 预览 → 确认执行；
+        // 预览和执行后端走同一份计划，三个弹窗共用 edit 状态和预览、页脚）
         // ============================================================
         _newEdit(mode) {
             return {
-                mode,                 // edit=改专辑信息 / move=移到别的专辑
+                mode,                 // edit=改专辑信息 / move=移到别的专辑 / place=按标签归位
                 stage: "form",
                 fromDir: this.album ? this.album.dir : "",
                 album: "", albumartist: "", year: "", moveFolder: true,
                 paths: [], targetQuery: "", target: "", retag: true,
+                toNew: false, newArtist: "", newAlbum: "",   // 移到新专辑
+                groups: [], skipped: [],                     // 按标签归位的分组
                 busy: false, error: "", preview: null,
             };
         },
@@ -545,9 +547,32 @@ function organizePage() {
             this.$store.modals.songMove = true;
         },
 
+        // 按标签归位：先向后台要分组建议，每组默认都归位，歌手名、专辑名可改
+        async openPlace() {
+            this.edit = this._newEdit("place");
+            this.edit.busy = true;
+            let data;
+            try {
+                data = await api("/api/library/unplaced/suggest");
+            } catch (e) {
+                showToast(e.message, "错误");
+                this.edit.busy = false;
+                return;
+            }
+            this.edit.busy = false;
+            const groups = [];
+            for (const g of data.data.groups) {
+                groups.push({ artist: g.artist, album: g.album, paths: g.paths, on: true });
+            }
+            this.edit.groups = groups;
+            this.edit.skipped = data.data.skipped;
+            this.$store.modals.placeAuto = true;
+        },
+
         closeChange() {
             this.$store.modals.albumEdit = false;
             this.$store.modals.songMove = false;
+            this.$store.modals.placeAuto = false;
         },
 
         // 目标专辑候选：全部专辑（含单曲），按搜索词过滤，当前专辑除外，最多 50 个
@@ -580,14 +605,24 @@ function organizePage() {
 
         async _postEdit(preview) {
             if (this.edit.mode === "move") {
-                return api("/api/library/songs/move", {
+                const body = { paths: this.edit.paths, retag: this.edit.retag, preview };
+                if (this.edit.toNew) {
+                    body.new_artist = this.edit.newArtist.trim();
+                    body.new_album = this.edit.newAlbum.trim();
+                } else {
+                    body.target_dir = this.edit.target;
+                }
+                return api("/api/library/songs/move", { method: "POST", body: JSON.stringify(body) });
+            }
+            if (this.edit.mode === "place") {
+                const groups = [];
+                for (const g of this.edit.groups) {
+                    if (!g.on) continue;
+                    groups.push({ artist: g.artist.trim(), album: g.album.trim(), paths: g.paths });
+                }
+                return api("/api/library/unplaced/place", {
                     method: "POST",
-                    body: JSON.stringify({
-                        paths: this.edit.paths,
-                        target_dir: this.edit.target,
-                        retag: this.edit.retag,
-                        preview,
-                    }),
+                    body: JSON.stringify({ groups, preview }),
                 });
             }
             return api("/api/library/album/edit", {
@@ -604,9 +639,25 @@ function organizePage() {
         async previewEdit() {
             if (this.edit.busy) return;
             this.edit.error = "";
-            if (this.edit.mode === "move" && !this.edit.target) {
+            if (this.edit.mode === "move" && !this.edit.toNew && !this.edit.target) {
                 this.edit.error = "先选一张目标专辑";
                 return;
+            }
+            if (this.edit.mode === "move" && this.edit.toNew
+                && (!this.edit.newArtist.trim() || !this.edit.newAlbum.trim())) {
+                this.edit.error = "歌手名和专辑名都要填";
+                return;
+            }
+            if (this.edit.mode === "place") {
+                const chosen = this.edit.groups.filter(g => g.on);
+                if (!chosen.length) {
+                    this.edit.error = "至少选一组";
+                    return;
+                }
+                if (chosen.some(g => !g.artist.trim() || !g.album.trim())) {
+                    this.edit.error = "选中的每组都要填歌手名和专辑名";
+                    return;
+                }
             }
             if (this.edit.mode === "edit" && !Object.keys(this._editChanges()).length) {
                 this.edit.error = "没有改动任何内容";
@@ -648,8 +699,8 @@ function organizePage() {
                 showToast(data.msg, "改好了", "success");
             }
 
-            // 移动歌曲：留在原地，重读目录树（当前专辑还在就刷新，空了就回到歌手）和待处理
-            if (this.edit.mode === "move") {
+            // 移动歌曲、按标签归位：留在原地，重读目录树（当前专辑还在就刷新，空了就回到歌手）和待处理
+            if (this.edit.mode === "move" || this.edit.mode === "place") {
                 await Promise.all([this.loadTree(), this.loadPending()]);
                 return;
             }

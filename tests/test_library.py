@@ -432,6 +432,102 @@ def test_move_target_must_exist(client, out_dir):
     assert r.status_code == 400
 
 
+def test_move_to_new_album_creates_folder_and_retags(client, out_dir):
+    """移到新专辑：填歌手名、专辑名，新建「歌手/专辑」文件夹；标签改成填的名字"""
+    src = _make_flac(out_dir / "梅雨季 demo.flac", artist="张震岳")
+    _index(src)
+
+    d = _move(client, paths=[str(src)], new_artist="张震岳", new_album="demo 合集",
+              retag=True, preview=True).get_json()["data"]
+    assert d["new_dir"] == "张震岳/demo 合集"
+    assert {"key": "album", "old": "", "new": "demo 合集"} in d["plans"][0]["tags"]
+
+    body = _move(client, paths=[str(src)], new_artist="张震岳", new_album="demo 合集",
+                 retag=True, preview=False).get_json()
+    moved = out_dir / "张震岳" / "demo 合集" / "梅雨季 demo.flac"
+    assert body["data"]["results"][0]["status"] == "done"
+    assert moved.exists() and not src.exists()
+    assert FLAC(str(moved))["albumartist"] == ["张震岳"]
+
+
+def test_move_to_new_album_merges_into_existing_year_folder(client, out_dir):
+    """这位歌手下已有同名专辑（带年份）就合进去，不另建一个不带年份的"""
+    _make_flac(out_dir / "痛仰乐队" / "不要停止我的音乐 (2008)" / "公路之歌.flac")
+    src = _make_flac(out_dir / "零散" / "西湖.flac")
+
+    d = _move(client, paths=[str(src)], new_artist="痛仰乐队", new_album="不要停止我的音乐",
+              preview=True).get_json()["data"]
+    assert d["new_dir"] == "痛仰乐队/不要停止我的音乐 (2008)"
+
+
+@pytest.mark.parametrize("body", [
+    {"new_artist": "甲", "new_album": ""},
+    {"new_artist": "  ", "new_album": "A"},
+])
+def test_move_to_new_album_needs_both_names(client, out_dir, body):
+    a = _make_flac(out_dir / "x.flac")
+    assert _move(client, paths=[str(a)], preview=True, **body).status_code == 400
+
+
+# ======================================================================
+# 按标签归位
+# ======================================================================
+def test_suggest_groups_by_tags(client, out_dir):
+    a = _make_flac(out_dir / "河流" / "无处安放 - 汪峰.flac", artist="汪峰", album="河流")
+    b = _make_flac(out_dir / "河流" / "第二首.flac", artist="汪峰", album="河流")
+    c = _make_flac(out_dir / "文明时代" / "Hold My Hand.flac", artist="MC光光 法老", album="文明时代")
+    d = _make_flac(out_dir / "专辑歌手优先" / "x.flac", artist="甲/乙", albumartist="丙、丁", album="Z")
+    e = _make_flac(out_dir / "搬家 demo.flac")                         # 没有标签
+    f = _make_flac(out_dir / "交响组曲.flac", artist="帝玖管弦乐团")      # 没有专辑
+    placed = _make_flac(out_dir / "甲" / "A" / "已归位.flac", artist="甲", album="A")
+    for p in (a, b, c, d, e, f, placed):
+        _index(p)
+
+    data = client.get("/api/library/unplaced/suggest").get_json()["data"]
+    groups = [(g["artist"], g["album"], len(g["paths"])) for g in data["groups"]]
+    # 空格隔开的不拆；「/、」隔开的取第一个；专辑歌手优先于歌手
+    assert groups == [("MC光光 法老", "文明时代", 1), ("丙", "Z", 1), ("汪峰", "河流", 2)]
+    reasons = {Path(k["path"]).name: k["reason"] for k in data["skipped"]}
+    assert reasons == {"搬家 demo.flac": "没有专辑标签", "交响组曲.flac": "没有专辑标签"}
+
+
+def _place(client, **body):
+    return client.post("/api/library/unplaced/place", json=body)
+
+
+def test_place_with_edited_names_moves_only(client, out_dir):
+    """改过歌手名的组按改后的名字归位；只挪位置，不改标签和文件名"""
+    a = _make_flac(out_dir / "文明时代" / "Hold My Hand.flac", artist="MC光光 法老", album="文明时代")
+    b = _make_flac(out_dir / "河流" / "无处安放 - 汪峰.flac", artist="汪峰", album="河流")
+    _index(a)
+    _index(b)
+    groups = [{"artist": "法老", "album": "文明时代", "paths": [str(a)]},
+              {"artist": "汪峰", "album": "河流", "paths": [str(b)]}]
+
+    d = _place(client, groups=groups, preview=True).get_json()["data"]
+    assert [p["to"] for p in d["plans"]] == ["法老/文明时代/Hold My Hand.flac",
+                                            "汪峰/河流/无处安放 - 汪峰.flac"]
+    assert all(not p["tags"] for p in d["plans"])
+    assert a.exists()                                          # 预览不动
+
+    body = _place(client, groups=groups, preview=False).get_json()
+    assert [r["status"] for r in body["data"]["results"]] == ["done", "done"]
+    moved = out_dir / "法老" / "文明时代" / "Hold My Hand.flac"
+    assert moved.exists() and FLAC(str(moved))["artist"] == ["MC光光 法老"]
+    assert not (out_dir / "文明时代").exists()                  # 挪空的旧文件夹删掉
+
+
+@pytest.mark.parametrize("groups", [
+    [],
+    [{"artist": "", "album": "A", "paths": ["x"]}],
+    [{"artist": "甲", "album": "A", "paths": []}],
+    [{"artist": "甲", "album": "A", "paths": ["/etc/passwd"]}],
+    ["不是分组"],
+])
+def test_place_rejects_bad_input(client, out_dir, groups):
+    assert _place(client, groups=groups, preview=True).status_code == 400
+
+
 # ======================================================================
 # 空文件夹
 # ======================================================================

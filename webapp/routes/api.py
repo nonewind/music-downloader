@@ -55,9 +55,9 @@ from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
                     is_trusted_request, set_token_cookie, token_from_env)
 from core.organizer import FileEntry, group_duplicates, read_easy_tags, track_no_of, year_of
 from organizer_manager import OrganizerBusyError
-from library import (LibraryBusyError, album_rows, ensure_not_busy, execute_plans,
-                     file_problem, find_empty_dirs, plan_album_edit, plan_move_songs,
-                     remove_empty_dirs, split_album_dir)
+from library import (LibraryBusyError, album_folder_for, album_rows, ensure_not_busy,
+                     execute_plans, file_problem, find_empty_dirs, plan_album_edit,
+                     plan_move_songs, remove_empty_dirs, split_album_dir, suggest_placement)
 from paths import current_output_dir
 from task_manager import (
     UPGRADE_BATCH_LIMIT,
@@ -2639,15 +2639,24 @@ def library_songs_move():
 
     请求体：{"paths": [绝对路径...], "target_dir": "歌手/专辑",
              "retag": true（专辑名/专辑歌手/年份改成和目标专辑一样）, "preview": true}
+    移到新专辑时不传 target_dir，改传 "new_artist"、"new_album"（歌手名、专辑名）：
+    这位歌手下已有同名专辑就合进去，没有就新建文件夹。
     """
     out_dir = _resolve_output_dir()
     data = _json_body()
     raw_paths = data.get("paths")
     target_rel = str(data.get("target_dir") or "").strip()
+    new_artist = str(data.get("new_artist") or "").strip()
+    new_album = str(data.get("new_album") or "").strip()
     retag = bool(data.get("retag"))
     preview = bool(data.get("preview"))
 
     # 步骤 1：检查输入（只在这里查一次）
+    to_new_album = not target_rel
+    if to_new_album:
+        if not new_artist or not new_album:
+            return jsonify({"code": 1, "msg": "歌手名和专辑名都要填"}), 400
+        target_rel = album_folder_for(out_dir, new_artist, new_album)
     if not _library_dir_ok(target_rel):
         return jsonify({"code": 1, "msg": "目标专辑位置不对"}), 400
     if not isinstance(raw_paths, list) or not raw_paths:
@@ -2659,7 +2668,7 @@ def library_songs_move():
             return jsonify({"code": 1, "msg": f"{Path(str(raw)).name}：{reason}"}), 400
         srcs.append(path)
     target_path = out_dir.joinpath(*target_rel.split("/"))
-    if not target_path.is_dir():
+    if not to_new_album and not target_path.is_dir():
         return jsonify({"code": 1, "msg": "目标专辑文件夹不存在，可以重新扫描后再选"}), 400
 
     # 步骤 2：算计划；预览只返回计划
@@ -2683,12 +2692,8 @@ def library_unplaced():
     """未归位文件：不在「歌手/专辑/歌曲」三层结构里的，附「文件有问题」说明"""
     out_dir = _resolve_output_dir()
     items = []
-    for r in LocalAudioFile.query.filter_by(status="active").order_by(LocalAudioFile.path).all():
+    for r in _library_unplaced_rows(out_dir):
         path = Path(r.path)
-        if not path.is_relative_to(out_dir):
-            continue
-        if len(path.relative_to(out_dir).parts) == 3:
-            continue
         item = _organize_row_item(r, out_dir)
         try:
             item["problem"] = file_problem(path)
@@ -2696,6 +2701,83 @@ def library_unplaced():
             item["problem"] = f"读不了：{e}"
         items.append(item)
     return jsonify({"code": 0, "data": {"items": items}})
+
+
+def _library_unplaced_rows(out_dir: Path) -> list[LocalAudioFile]:
+    """未归位的索引行：在下载目录里、但不是「歌手/专辑/歌曲」三层的"""
+    rows = []
+    for r in LocalAudioFile.query.filter_by(status="active").order_by(LocalAudioFile.path).all():
+        path = Path(r.path)
+        if not path.is_relative_to(out_dir):
+            continue
+        if len(path.relative_to(out_dir).parts) == 3:
+            continue
+        rows.append(r)
+    return rows
+
+
+@api_bp.route("/library/unplaced/suggest")
+def library_unplaced_suggest():
+    """按标签给未归位文件出归位建议：同一（歌手, 专辑）一组，页面上可以改名后再归位"""
+    out_dir = _resolve_output_dir()
+    paths = [Path(r.path) for r in _library_unplaced_rows(out_dir)]
+    groups, skipped = suggest_placement(paths)
+    return jsonify({"code": 0, "data": {"groups": groups, "skipped": skipped}})
+
+
+@api_bp.route("/library/unplaced/place", methods=["POST"])
+def library_unplaced_place():
+    """按分组把未归位文件挪进「歌手/专辑」（只挪位置，不改标签、不改文件名）
+
+    请求体：{"groups": [{"artist": 歌手名, "album": 专辑名, "paths": [绝对路径...]}],
+             "preview": true}
+    """
+    out_dir = _resolve_output_dir()
+    data = _json_body()
+    raw_groups = data.get("groups")
+    preview = bool(data.get("preview"))
+
+    # 步骤 1：检查输入（只在这里查一次）
+    if not isinstance(raw_groups, list) or not raw_groups:
+        return jsonify({"code": 1, "msg": "没有要归位的文件"}), 400
+    targets = []
+    for g in raw_groups:
+        if not isinstance(g, dict):
+            return jsonify({"code": 1, "msg": "分组格式不对"}), 400
+        artist = str(g.get("artist") or "").strip()
+        album = str(g.get("album") or "").strip()
+        raw_paths = g.get("paths")
+        if not artist or not album:
+            return jsonify({"code": 1, "msg": "每组的歌手名和专辑名都要填"}), 400
+        if not isinstance(raw_paths, list) or not raw_paths:
+            return jsonify({"code": 1, "msg": f"{artist} / {album}：没有文件"}), 400
+        target_rel = album_folder_for(out_dir, artist, album)
+        if not _library_dir_ok(target_rel):
+            return jsonify({"code": 1, "msg": f"{artist} / {album}：名字不能用作文件夹"}), 400
+        srcs = []
+        for raw in raw_paths:
+            path, reason = _organize_validate_path(str(raw), out_dir)
+            if path is None:
+                return jsonify({"code": 1, "msg": f"{Path(str(raw)).name}：{reason}"}), 400
+            srcs.append(path)
+        targets.append((target_rel, srcs))
+
+    # 步骤 2：算计划（每组一份，拼起来）；预览只返回计划
+    try:
+        ensure_not_busy()
+    except LibraryBusyError as e:
+        return jsonify({"code": 1, "msg": str(e)})
+    plans = []
+    for target_rel, srcs in targets:
+        plans.extend(plan_move_songs(out_dir, srcs, target_rel, retag=False))
+    if preview:
+        return jsonify({"code": 0, "data": {
+            "new_dir": "",
+            "plans": [_library_plan_dict(p, out_dir) for p in plans],
+        }})
+
+    # 步骤 3：执行
+    return _library_results_reply("", execute_plans(out_dir, plans))
 
 
 @api_bp.route("/library/empty-dirs")

@@ -174,11 +174,11 @@ def build_entry(path: Path, ext: str) -> FileEntry:
 
 
 # 音乐库现读的几项标签（easy=True 下 FLAC/OGG/MP3/M4A 键名一致）
-EASY_TAG_KEYS = ("album", "albumartist", "date", "tracknumber")
+EASY_TAG_KEYS = ("album", "albumartist", "artist", "date", "tracknumber")
 
 
 def read_easy_tags(path: Path) -> dict[str, str]:
-    """现读一个文件的专辑、专辑歌手、日期、曲序（索引里不存后三项）
+    """现读一个文件的专辑、专辑歌手、歌手、日期、曲序（索引里不存专辑歌手、日期、曲序）
 
     文件读不了（坏文件、改了扩展名的文件）时与 build_entry 一样只记警告。
 

@@ -40,6 +40,15 @@
     .lib-hint { padding: 40px 12px; text-align: center; font-size: 15px; color: var(--ui-text-3); }
     .lib-sec-first { margin-bottom: 8px; }
     .lib-pending-sec { margin-top: 28px; }
+    .lib-move-kind { margin-bottom: 14px; }
+    .lib-place-list { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; margin: 10px 0; }
+    .lib-place-group { padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); transition: opacity .15s; }
+    .lib-place-group.is-off { opacity: .55; }
+    .lib-place-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+    .lib-place-fields .lib-label { margin-bottom: 6px; }
+    .lib-place-files { font-size: 13px; color: var(--ui-text-2); }
+    .lib-place-skip { margin-top: 8px; font-size: 14px; color: var(--ui-text-2); }
+    @media (max-width: 767.98px) { .lib-place-fields { grid-template-columns: 1fr; } }
     .lib-song.is-picked { background: var(--ui-primary-softer); box-shadow: inset 3px 0 0 var(--ui-primary); }
     .lib-pickbar { margin-top: 10px; }
     .lib-un-row { grid-template-columns: 28px minmax(0, 1fr) auto 72px; }
@@ -430,9 +439,13 @@
     </template>
 
     <!-- 6.2 未归位文件：不在「歌手/专辑/歌曲」三层结构里 -->
-    <h2 class="sec-title lib-pending-sec">未归位文件</h2>
+    <div class="sec-head">
+        <h2 class="sec-title">未归位文件</h2>
+        <button type="button" class="link-btn" x-show="unplacedItems.length" :disabled="!!(scanning || cleaning || edit.busy)"
+                @click="openPlace()"><i class="bi bi-magic"></i> 按标签归位</button>
+    </div>
     <p class="lib-pending-sum" x-show="unplacedItems.length">
-        这些文件不在「歌手/专辑/歌曲」三层文件夹里，音乐库浏览里看不到。可以勾选后移到某张专辑，或移入回收站。
+        这些文件不在「歌手/专辑/歌曲」三层文件夹里，音乐库浏览里看不到。可以按标签一键归位，或勾选后移到某张专辑（也可以新建专辑）、移入回收站。
     </p>
     <div x-show="!unplacedItems.length">{{ ui.empty('check2-circle', '没有未归位的文件') }}</div>
     <div class="list-card" x-show="unplacedItems.length">
@@ -561,17 +574,32 @@
     {# 移到别的专辑：选目标专辑 → 预览 → 确认执行（页脚和改专辑信息共用） #}
     {% set move_body %}
     <div x-show="edit.stage === 'form'">
-        <label class="lib-label">移到哪张专辑
-            <input type="search" class="ui-input" placeholder="搜歌手或专辑名" x-model="edit.targetQuery">
-        </label>
-        <div class="lib-targets">
-            <template x-for="t in moveTargets" :key="t.dir">
-                <button type="button" class="lib-target" :class="{ 'is-on': edit.target === t.dir }" @click="edit.target = t.dir">
-                    <span x-text="t.name"></span>
-                    <small x-text="t.sub"></small>
-                </button>
-            </template>
-            <div class="lib-hint" x-show="!moveTargets.length">没有找到</div>
+        <div class="chips lib-move-kind">
+            <button type="button" class="chip" :class="{ active: !edit.toNew }" @click="edit.toNew = false">已有专辑</button>
+            <button type="button" class="chip" :class="{ active: edit.toNew }" @click="edit.toNew = true">新专辑</button>
+        </div>
+        <div x-show="!edit.toNew">
+            <label class="lib-label">移到哪张专辑
+                <input type="search" class="ui-input" placeholder="搜歌手或专辑名" x-model="edit.targetQuery">
+            </label>
+            <div class="lib-targets">
+                <template x-for="t in moveTargets" :key="t.dir">
+                    <button type="button" class="lib-target" :class="{ 'is-on': edit.target === t.dir }" @click="edit.target = t.dir">
+                        <span x-text="t.name"></span>
+                        <small x-text="t.sub"></small>
+                    </button>
+                </template>
+                <div class="lib-hint" x-show="!moveTargets.length">没有找到</div>
+            </div>
+        </div>
+        <div x-show="edit.toNew">
+            <label class="lib-label">歌手名
+                <input type="text" class="ui-input" x-model="edit.newArtist">
+            </label>
+            <label class="lib-label">专辑名
+                <input type="text" class="ui-input" x-model="edit.newAlbum">
+            </label>
+            <p class="lib-pv-note">放进「歌手名/专辑名」文件夹；这位歌手下已有同名专辑就合进去。</p>
         </div>
         <label class="lib-check">
             <span class="ui-check"><input type="checkbox" x-model="edit.retag"></span>
@@ -584,6 +612,42 @@
     <div class="lib-err" x-show="edit.error" x-text="edit.error"></div>
     {% endset %}
     {{ ui.modal('songMove', '移到别的专辑', move_body, edit_footer) }}
+
+    {# 按标签归位：按标签分好组 → 每组的歌手名、专辑名可以改、可以不要 → 预览 → 确认执行 #}
+    {% set place_body %}
+    <div x-show="edit.stage === 'form'">
+        <p class="lib-pv-note">按标签分好了组，会放进「歌手/专辑」文件夹，只挪位置，不改标签和文件名。
+            合唱歌的歌手名用空格隔开时没法自动拆，请改成要放的那位歌手。</p>
+        <div class="lib-place-list">
+            <template x-for="(g, gi) in edit.groups" :key="gi">
+                <div class="lib-place-group" :class="{ 'is-off': !g.on }">
+                    <label class="lib-check">
+                        <span class="ui-check"><input type="checkbox" x-model="g.on" :aria-label="'归位这一组：' + g.album"></span>
+                        <span x-text="g.paths.length + ' 首'"></span>
+                    </label>
+                    <div class="lib-place-fields">
+                        <label class="lib-label">歌手<input type="text" class="ui-input" x-model="g.artist" :disabled="!g.on"></label>
+                        <label class="lib-label">专辑<input type="text" class="ui-input" x-model="g.album" :disabled="!g.on"></label>
+                    </div>
+                    <div class="lib-place-files">
+                        <template x-for="p in g.paths" :key="p">
+                            <div class="ui-truncate" x-text="fileName(p)" :title="p"></div>
+                        </template>
+                    </div>
+                </div>
+            </template>
+        </div>
+        <div class="lib-place-skip" x-show="edit.skipped.length">
+            <div>这些没法自动归位，可以勾选后「移到别的专辑 → 新专辑」：</div>
+            <template x-for="k in edit.skipped" :key="k.path">
+                <div class="ui-truncate" x-text="fileName(k.path) + '（' + k.reason + '）'" :title="k.path"></div>
+            </template>
+        </div>
+    </div>
+    {{ change_preview }}
+    <div class="lib-err" x-show="edit.error" x-text="edit.error"></div>
+    {% endset %}
+    {{ ui.modal('placeAuto', '按标签归位', place_body, edit_footer) }}
 </div>
 {% endblock %}
 

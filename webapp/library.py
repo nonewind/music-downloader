@@ -218,6 +218,60 @@ def plan_move_songs(out_dir: Path, srcs: list[Path], target_rel: str,
     return plans
 
 
+def album_folder_for(out_dir: Path, artist: str, album: str) -> str:
+    """按歌手名、专辑名定专辑文件夹，返回「歌手文件夹/专辑文件夹」
+
+    名字用 sanitize_filename 清洗（和下载时一致）；歌手文件夹下已有同名专辑
+    （不管带不带「(年份)」）就用它，合到一起；没有就新建「专辑」文件夹。
+    """
+    artist_dir = sanitize_filename(artist)
+    album_dir = sanitize_filename(album)
+    artist_path = out_dir / artist_dir
+    if artist_path.is_dir():
+        for child in sorted(artist_path.iterdir()):
+            if child.is_dir() and split_album_dir(child.name)[0] == album_dir:
+                return f"{artist_dir}/{child.name}"
+    return f"{artist_dir}/{album_dir}"
+
+
+# ======================================================================
+# 未归位文件：按标签给出归位建议
+# ======================================================================
+def suggest_placement(paths: list[Path]) -> tuple[list[dict], list[dict]]:
+    """按标签给未归位文件分组：同一个（歌手, 专辑）一组
+
+    歌手取专辑歌手标签，没有就取歌手标签；有「/、&,;」隔开的取第一个。
+    用空格隔开的不拆（「波普电 Popest」本身就是一个名字），留给页面上人工改。
+
+    Returns:
+        (groups, skipped)
+        groups: [{artist, album, paths}]，按歌手、专辑排序
+        skipped: [{path, reason}]，没有专辑或歌手标签的
+    """
+    grouped: dict[tuple[str, str], list[str]] = {}
+    skipped = []
+    for path in paths:
+        tags = read_easy_tags(path)
+        album = tags.get("album", "").strip()
+        artist_raw = tags.get("albumartist", "").strip()
+        if not artist_raw:
+            artist_raw = tags.get("artist", "").strip()
+        artist = re.split(r"[/、&,;，；]", artist_raw)[0].strip()
+
+        if not album:
+            skipped.append({"path": str(path), "reason": "没有专辑标签"})
+            continue
+        if not artist:
+            skipped.append({"path": str(path), "reason": "没有歌手标签"})
+            continue
+        grouped.setdefault((artist, album), []).append(str(path))
+
+    groups = []
+    for (artist, album), group_paths in sorted(grouped.items()):
+        groups.append({"artist": artist, "album": album, "paths": group_paths})
+    return groups, skipped
+
+
 # ======================================================================
 # 空文件夹
 # ======================================================================
