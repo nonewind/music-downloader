@@ -35,6 +35,10 @@
     .set-label { display: block; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: var(--ui-text); }
     .set-input { width: 100%; max-width: 420px; }
     .set-hint { margin-top: 4px; font-size: 13px; color: var(--ui-text-3); }
+    /* 输入框 + 按钮同一行（访问令牌）：手机上也不换行，输入框让出宽度 */
+    .set-inline { display: flex; gap: 8px; max-width: 420px; }
+    .set-inline .ui-input { flex: 1; min-width: 0; }
+    .set-inline .ui-btn { flex-shrink: 0; }
 
     /* 局部多列：仅用于语义并列的短字段（音质三平台 / 成对数字输入） */
     .set-cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -72,8 +76,12 @@
     .set-banner .ui-btn { margin-left: auto; }
 
     /* 保存栏：sticky 常驻底部，跨分类可见 */
-    .set-savebar { position: sticky; bottom: calc(var(--app-bottom) + 10px); z-index: 800; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
-    .set-dirty { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: 13px; color: var(--ui-warning); }
+    /* 保存：只有按钮（和未保存提示）悬浮在右下角，后面不垫整条白栏；
+       栏本身不接收点击，免得挡住下面的输入框 */
+    .set-savebar { position: sticky; bottom: calc(var(--app-bottom) + 10px); z-index: 800; display: flex; align-items: center; justify-content: flex-end; gap: 10px; pointer-events: none; }
+    .set-savebar > * { pointer-events: auto; }
+    .set-savebar .ui-btn { box-shadow: var(--ui-shadow-2); }
+    .set-dirty { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 13px; color: var(--ui-warning); background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: 999px; box-shadow: var(--ui-shadow-2); }
     .set-dirty i { font-size: 8px; }
 
     /* 窄屏：分类导航变顶部横向滚动 chips，表单列退化为单列 */
@@ -317,8 +325,8 @@
                                     <span class="set-hint" x-text="tokenState.enabled ? '（已启用' + (tokenState.fromEnv ? '，来自环境变量 ACCESS_TOKEN' : '') + '）' : '（未启用）'"></span>
                                 </label>
                                 <template x-if="!tokenState.fromEnv">
-                                    <div style="display:flex;gap:8px;flex-wrap:wrap">
-                                        <input type="password" class="ui-input set-input" x-model="tokenState.input" placeholder="至少 8 个字符" autocomplete="new-password" style="flex:1;min-width:180px">
+                                    <div class="set-inline">
+                                        <input type="password" class="ui-input" x-model="tokenState.input" placeholder="至少 8 个字符" autocomplete="new-password">
                                         <button type="button" class="ui-btn ui-btn-primary" :disabled="!!(tokenState.busy || !tokenState.input)" @click="saveAccessToken(false)">设置</button>
                                         <button type="button" class="ui-btn" x-show="tokenState.enabled" :disabled="!!tokenState.busy" @click="saveAccessToken(true)">关闭</button>
                                     </div>
