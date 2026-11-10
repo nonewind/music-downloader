@@ -273,7 +273,8 @@ def add_playlist():
          "platform": "netease" / "qq" / "kugou"}
     """
     data = _json_body()
-    source = (data.get("source") or "").strip()
+    # 找歌页卡片「关注」发来的 source 是数字 ID，手动添加发来的是文字，统一转成文字
+    source = str(data.get("source") or "").strip()
     pl_type = data.get("type", "user")
     limit = _safe_int(data.get("limit", 100), 100, lo=1, hi=9999)
     platform = (data.get("platform") or "").strip().lower() or "netease"

@@ -151,3 +151,18 @@ def test_playlist_detail_empty_and_bad_id(client, monkeypatch):
 
     r, _ = _detail(client, monkeypatch, {}, pid="abc")
     assert r.status_code == 400
+
+
+# 找歌页卡片「关注」：source 以数字 ID 发来（此前后台 .strip() 报 500）
+def test_add_playlist_accepts_numeric_source(client, monkeypatch):
+    from models import Playlist
+
+    stub = _DetailClient({"name": "热歌榜", "track_count": 300, "tracks": []})
+    monkeypatch.setattr(api_module, "_get_client", lambda platform="netease": stub)
+    r = client.post("/api/playlists", json={
+        "source": 3778678, "type": "official", "limit": 100, "platform": "netease",
+    })
+
+    assert r.status_code == 200
+    assert r.get_json()["code"] == 0
+    assert db.session.get(Playlist, 3778678).name == "热歌榜"
