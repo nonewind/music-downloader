@@ -9,6 +9,8 @@
    惰性缓存：命中不读盘，新算结果回写行
 4. 关联回填（ORG-02）：扫描内用 DownloadTask / Song 的 file_path 命中
    给索引行回填可信身份 (platform, song_id)（只读任务/Song 表）
+4.5 下载完成登记（register_downloaded_file）：下载任务完成时把新文件直接
+   写进索引，不必等下次扫描（下载历史不再显示「未入索引」）
 5. 文件清理后台任务化（ORG-03）：/api/organize/clean 提交逐文件计划
    （OrganizerCleanItem），执行时逐条重验 + 落盘 + 即时 commit（中断安全），
    删除成功后统一做 Song 关联修复（repair 重指 / 无保留则清空指针）
@@ -27,7 +29,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from core.organizer import FileEntry, group_duplicates, scan_directory
+from core.organizer import FileEntry, build_entry, group_duplicates, scan_directory
 from models import (
     ORGANIZER_JOB_ACTIVE_STATUSES,
     DownloadTask,
@@ -41,6 +43,56 @@ from models import (
 from paths import current_output_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _fill_index_row(row: LocalAudioFile, e: FileEntry) -> None:
+    """把磁盘读到的文件信息写进索引行（扫描与下载完成登记共用）"""
+    row.size = e.size
+    row.mtime = e.mtime
+    row.status = "active"
+    row.ext = e.ext
+    row.lossless = e.lossless
+    row.duration_ms = e.duration_ms
+    row.bitrate_kbps = e.bitrate_kbps
+    row.sample_rate = e.sample_rate
+    row.channels = e.channels
+    row.bits_per_sample = e.bits_per_sample
+    row.title = e.title
+    row.artist = e.artist
+    row.album = e.album
+    row.song_id = e.song_id
+    row.content_hash = None        # 文件变化，惰性哈希作废
+
+
+def register_downloaded_file(path: Path, platform: str, song_id: str) -> None:
+    """下载完成时把文件登记进本地文件索引（调用方须在 app context 内）
+
+    - 路径与扫描同一写法：resolve 后的绝对路径，避免同一文件出现两行；
+    - 已有行（重下覆盖、之前进过回收站/被删过）原地更新为 active；
+    - 身份 (platform, song_id) 直接用下载任务的，和扫描内关联回填同一来源；
+    - 有整理任务在途时不登记：扫描开头已取过索引快照，此时插入同路径行
+      会和扫描的新增撞唯一约束。这种情况留给下次扫描收录。
+    """
+    # 1. 有整理任务在途 → 跳过
+    busy = OrganizerJob.query.filter(
+        OrganizerJob.status.in_(ORGANIZER_JOB_ACTIVE_STATUSES)).first()
+    if busy is not None:
+        logger.info("整理任务进行中，跳过下载完成登记: %s", path)
+        return
+
+    # 2. 读文件信息（与扫描同一读取函数）
+    real_path = path.resolve()
+    entry = build_entry(real_path, real_path.suffix.lower())
+
+    # 3. 新建或更新索引行
+    row = LocalAudioFile.query.filter_by(path=str(real_path)).first()
+    if row is None:
+        row = LocalAudioFile(path=str(real_path))
+        db.session.add(row)
+    _fill_index_row(row, entry)
+    row.platform = platform
+    row.song_id = song_id
+    db.session.commit()
 
 
 
@@ -363,21 +415,7 @@ class OrganizerManager:
                     n_new += 1
                 else:
                     n_updated += 1
-                row.size = e.size
-                row.mtime = e.mtime
-                row.status = "active"
-                row.ext = e.ext
-                row.lossless = e.lossless
-                row.duration_ms = e.duration_ms
-                row.bitrate_kbps = e.bitrate_kbps
-                row.sample_rate = e.sample_rate
-                row.channels = e.channels
-                row.bits_per_sample = e.bits_per_sample
-                row.title = e.title
-                row.artist = e.artist
-                row.album = e.album
-                row.song_id = e.song_id
-                row.content_hash = None        # 文件变化，惰性哈希作废
+                _fill_index_row(row, e)
                 row.last_scan_job_id = job.id
             job.processed = idx
             job.progress = idx * 100 // total if total else 100

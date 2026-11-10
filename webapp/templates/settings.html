@@ -56,6 +56,11 @@
     .set-checktext small { display: block; margin-top: 2px; font-size: 13px; line-height: 1.5; color: var(--ui-text-3); }
     .set-scope { display: inline-flex; gap: 16px; flex-wrap: wrap; }
 
+    /* 高级：API 服务折叠头（整行可点；收起时去掉底边线） */
+    .set-foldhead { width: 100%; background: none; border: 0; text-align: left; cursor: pointer; font-family: inherit; }
+    .set-foldhead[aria-expanded="false"] { border-bottom: 0; }
+    .set-foldhead .set-foldicon { margin-left: auto; }
+
     /* API 服务子块 */
     .set-svc { padding: 14px 0; }
     .set-svc:first-of-type { padding-top: 2px; }
@@ -144,9 +149,6 @@
                 </button>
                 <button type="button" class="set-navitem" :class="{ active: section === 'sync' }" @click="goSection('sync')">
                     <i class="bi bi-arrow-repeat"></i><span>自动同步</span>
-                </button>
-                <button type="button" class="set-navitem" :class="{ active: section === 'api' }" @click="goSection('api')">
-                    <i class="bi bi-hdd-network"></i><span>API 服务</span>
                 </button>
             </nav>
 
@@ -358,6 +360,43 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- 高级：API 服务（默认收起；服务由程序自动启动，一般无需改动） -->
+                    <div class="ui-card">
+                        <button type="button" class="set-cardhead set-foldhead" @click="toggleApiFold()" :aria-expanded="apiOpen ? 'true' : 'false'">
+                            <i class="bi bi-hdd-network"></i> 高级：API 服务
+                            <i class="bi set-foldicon" :class="apiOpen ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                        </button>
+                        <div class="set-body" x-show="apiOpen" x-cloak>
+                            <div class="set-hint">三个平台的 API 服务由程序自动启动，一般不需要改动。端口修改后需重启程序才生效；默认端口被占用时会自动换一个空闲端口。</div>
+                            <template x-for="svc in serviceList" :key="svc.key">
+                                <div class="set-svc">
+                                    <div class="set-svchead" x-text="svc.name"></div>
+                                    <!-- 状态徽章 + 详情（展开时 3s 轮询；自定义URL模式显示专属徽章） -->
+                                    <div class="set-svcstatus">
+                                        <span class="ui-badge" :class="svcBadge(svc.key).cls" x-text="svcBadge(svc.key).text"></span>
+                                        <span class="set-svcdetail" x-text="svcBadge(svc.key).detail"></span>
+                                    </div>
+                                    <!-- 端口（勾选自定义URL后锁定：内置服务端口不生效） -->
+                                    <div class="set-svcctl" :class="{ 'set-locked': isSvcCustom(svc.key) }">
+                                        <label class="set-inlinelabel">端口
+                                            <input type="number" class="ui-input set-port" x-model="form[svc.portKey]"
+                                                   min="1024" max="65535" :disabled="isSvcCustom(svc.key)">
+                                        </label>
+                                    </div>
+                                    <!-- 自定义URL：区块外，勾选后不受端口区块禁用影响 -->
+                                    <div class="set-customrow">
+                                        <label class="set-check">
+                                            <span class="ui-check"><input type="checkbox" x-model="form[svc.customKey]"></span>
+                                            <span class="set-checktext">使用自定义API服务URL</span>
+                                        </label>
+                                        <input type="text" class="ui-input set-url" x-model="form[svc.urlKey]"
+                                               :placeholder="svc.urlPlaceholder" :disabled="!form[svc.customKey]">
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- 下载行为 -->
@@ -546,57 +585,6 @@
                                     <div class="set-hint">触发后随机延迟 0~N 秒再执行，避免精准时刻请求</div>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- API 服务（三平台内置服务 + 可选自定义URL） -->
-                <div class="set-panel" x-show="section === 'api'">
-                    <div class="ui-card">
-                        <div class="set-cardhead"><i class="bi bi-hdd-network"></i> API 服务</div>
-                        <div class="set-body">
-                            <template x-for="svc in serviceList" :key="svc.key">
-                                <div class="set-svc">
-                                    <div class="set-svchead" x-text="svc.name"></div>
-                                    <!-- 状态徽章 + 详情（3s 轮询；自定义URL模式显示专属徽章） -->
-                                    <div class="set-svcstatus">
-                                        <span class="ui-badge" :class="svcBadge(svc.key).cls" x-text="svcBadge(svc.key).text"></span>
-                                        <span class="set-svcdetail" x-text="svcBadge(svc.key).detail"></span>
-                                    </div>
-                                    <!-- 内置服务区块（勾选自定义URL后整体锁定禁操作） -->
-                                    <div class="set-svcctl" :class="{ 'set-locked': isSvcCustom(svc.key) }">
-                                        <label class="set-inlinelabel">端口
-                                            <input type="number" class="ui-input set-port" x-model="form[svc.portKey]"
-                                                   min="1024" max="65535"
-                                                   :disabled="svcPortLocked(svc.key)" :title="svcPortTitle(svc.key)">
-                                        </label>
-                                        <label class="set-check">
-                                            <span class="ui-check"><input type="checkbox" x-model="form[svc.autoKey]"></span>
-                                            <span class="set-checktext">随程序启动自动启动</span>
-                                        </label>
-                                        <span class="ui-row-actions">
-                                            {{ ui.btn('启动', 'primary', size='sm', icon='play',
-                                                      attrs={':disabled': 'svcBusy(svc.key)',
-                                                             ':class': "{ 'is-loading': services[svc.key].starting }",
-                                                             '@click': 'startSvc(svc.key)'}) }}
-                                            {# 停止属危险操作：uiConfirm danger 二次确认（见 settings.js stopSvc） #}
-                                            {{ ui.btn('停止', 'danger', size='sm', icon='stop',
-                                                      attrs={':disabled': 'svcBusy(svc.key)',
-                                                             ':class': "{ 'is-loading': services[svc.key].stopping }",
-                                                             '@click': 'stopSvc(svc.key)'}) }}
-                                        </span>
-                                    </div>
-                                    <!-- 自定义URL：区块外，勾选后不受内置区块禁用影响 -->
-                                    <div class="set-customrow">
-                                        <label class="set-check">
-                                            <span class="ui-check"><input type="checkbox" x-model="form[svc.customKey]"></span>
-                                            <span class="set-checktext">使用自定义API服务URL</span>
-                                        </label>
-                                        <input type="text" class="ui-input set-url" x-model="form[svc.urlKey]"
-                                               :placeholder="svc.urlPlaceholder" :disabled="!form[svc.customKey]">
-                                    </div>
-                                </div>
-                            </template>
                         </div>
                     </div>
                 </div>

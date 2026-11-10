@@ -14,30 +14,29 @@
 //   POST   /api/settings/migrate-layout   执行迁移（移动用户文件 → uiConfirm 显式确认；
 //                                         文件较多耗时较长 → timeout 120s）
 //   GET    /api/{ncm|qq|kugou}/status     内置 API 服务状态（timeout 5s；失败保留上次状态）
-//   POST   /api/{ncm|qq|kugou}/start      启动（首次自解压最长约 60s → timeout 70s）
-//   POST   /api/{ncm|qq|kugou}/stop       停止（危险操作 → uiConfirm danger 确认）
+//                                         服务由程序自动启动，页面不提供启停
 //
 // 三服务状态轮询组件内统一管理：唯一 timer _pollTimer（3s，document.hidden
-// 跳过），init() 启动、destroy() 清理；自定义 URL 勾选时内置区块锁定且启停
-// 操作拦截提示；服务运行中禁改端口（title 提示先停止服务）。
+// 跳过，「高级：API 服务」折叠区收起时也跳过），init() 启动、destroy() 清理；
+// 自定义 URL 勾选时锁定内置服务端口。
 
 // 三平台内置 API 服务描述（模板 x-for 的唯一数据源；key 同时是 API 前缀）
 const SERVICE_DEFS = [
     {
         key: "ncm", name: "网易云API服务",
-        portKey: "ncm_api_port", autoKey: "ncm_api_auto_start",
+        portKey: "ncm_api_port", 
         customKey: "use_custom_api_url", urlKey: "custom_api_url",
         urlPlaceholder: "http://127.0.0.1:3000",
     },
     {
         key: "qq", name: "QQ音乐API服务",
-        portKey: "qq_api_port", autoKey: "qq_api_auto_start",
+        portKey: "qq_api_port", 
         customKey: "use_custom_qq_api_url", urlKey: "qq_api_base_url",
         urlPlaceholder: "http://127.0.0.1:45602",
     },
     {
         key: "kugou", name: "酷狗音乐API服务",
-        portKey: "kugou_api_port", autoKey: "kugou_api_auto_start",
+        portKey: "kugou_api_port", 
         customKey: "use_custom_kugou_api_url", urlKey: "kugou_api_base_url",
         urlPlaceholder: "http://127.0.0.1:45603",
     },
@@ -48,11 +47,11 @@ function svcDef(key) {
 }
 
 // 单个服务的运行时状态（每次调用 settingsPage() 随实例新建，无跨页共享）
-const blankSvcState = () => ({ data: null, starting: false, stopping: false });
+const blankSvcState = () => ({ data: null });
 
 // 设置页分类（UI-05 布局重写）：左侧导航的 section key 集合，
 // 同时用于校验地址栏 hash 与 goSection 入参
-const SETTING_SECTIONS = ["accounts", "general", "download", "quality", "multiaccount", "sync", "api"];
+const SETTING_SECTIONS = ["accounts", "general", "download", "quality", "multiaccount", "sync"];
 
 function settingsPage() {
     return {
@@ -69,6 +68,7 @@ function settingsPage() {
         migrate: { needs: null, busy: false },
         services: { ncm: blankSvcState(), qq: blankSvcState(), kugou: blankSvcState() },
         _pollTimer: null,         // 三服务状态轮询（组件内唯一 timer）
+        apiOpen: false,           // 「常规 → 高级：API 服务」折叠区是否展开（默认收起）
 
 
         // 有未保存更改（回填未完成时不提示；保存成功后随快照更新自动消失）
@@ -87,8 +87,7 @@ function settingsPage() {
         async init() {
             this._restoreSectionFromHash();
             window.addEventListener("hashchange", () => this._restoreSectionFromHash());
-            this.refreshAllSvc();
-            // 3s 轮询三服务状态（页面在后台时不发无谓请求，切回前台下一轮恢复）
+            // 3s 轮询三服务状态（只在折叠区展开时请求；页面在后台时也跳过）
             this._pollTimer = setInterval(() => this.pollSvcStatuses(), 3000);
             await this.loadSettings();
             this.refreshMigrateHint();
@@ -148,15 +147,12 @@ function settingsPage() {
                 // Web / API 服务
                 web_port: s.web_port || "127.0.0.1:45600",
                 ncm_api_port: s.ncm_api_port || "45601",
-                ncm_api_auto_start: s.ncm_api_auto_start === "true",
                 use_custom_api_url: s.use_custom_api_url === "true",
                 custom_api_url: s.custom_api_url || "",
                 qq_api_port: s.qq_api_port || "45602",
-                qq_api_auto_start: s.qq_api_auto_start === "true",
                 use_custom_qq_api_url: s.use_custom_qq_api_url === "true",
                 qq_api_base_url: s.qq_api_base_url || "http://127.0.0.1:45602",
                 kugou_api_port: s.kugou_api_port || "45603",
-                kugou_api_auto_start: s.kugou_api_auto_start === "true",
                 use_custom_kugou_api_url: s.use_custom_kugou_api_url === "true",
                 kugou_api_base_url: s.kugou_api_base_url || "http://127.0.0.1:45603",
                 // 下载行为
@@ -203,15 +199,12 @@ function settingsPage() {
             return {
                 web_port: txt(f.web_port),
                 ncm_api_port: txt(f.ncm_api_port),
-                ncm_api_auto_start: flag(f.ncm_api_auto_start),
                 use_custom_api_url: flag(f.use_custom_api_url),
                 custom_api_url: f.use_custom_api_url ? txt(f.custom_api_url) : "",
                 qq_api_port: txt(f.qq_api_port),
-                qq_api_auto_start: flag(f.qq_api_auto_start),
                 use_custom_qq_api_url: flag(f.use_custom_qq_api_url),
                 qq_api_base_url: f.use_custom_qq_api_url ? txt(f.qq_api_base_url) : "",
                 kugou_api_port: txt(f.kugou_api_port),
-                kugou_api_auto_start: flag(f.kugou_api_auto_start),
                 use_custom_kugou_api_url: flag(f.use_custom_kugou_api_url),
                 kugou_api_base_url: f.use_custom_kugou_api_url ? txt(f.kugou_api_base_url) : "",
                 output_dir: txt(f.output_dir),
@@ -313,18 +306,15 @@ function settingsPage() {
         },
 
         // ============================================================
-        // 三平台内置 API 服务：状态机 / 启停 / 轮询
+        // 三平台内置 API 服务：状态 / 轮询
         // ============================================================
 
-        // 徽章状态机：自定义URL > 启动中 > 未知 > 运行中/已停止
+        // 徽章状态机：自定义URL > 未知 > 运行中/已停止
         svcBadge(key) {
             const def = svcDef(key);
             const st = this.services[key];
             if (this.form[def.customKey]) {
                 return { cls: "ui-badge-info", text: "自定义URL", detail: "当前使用自定义API服务URL，内置服务已禁用" };
-            }
-            if (st.starting) {
-                return { cls: "ui-badge-warning", text: "启动中", detail: "首次启动需自解压，最长约 1 分钟" };
             }
             const d = st.data;
             if (!d) return { cls: "ui-badge-muted", text: "未知", detail: "" };
@@ -343,26 +333,9 @@ function settingsPage() {
             return parts.join(" · ");
         },
 
-        // 自定义 URL 勾选 = 内置区块锁定（禁端口/自动启动/启停操作）
+        // 自定义 URL 勾选 = 内置服务端口锁定
         isSvcCustom(key) {
             return !!this.form[svcDef(key).customKey];
-        },
-
-        svcBusy(key) {
-            const st = this.services[key];
-            return st.starting || st.stopping;
-        },
-
-        // 运行中禁改端口（停止后恢复；自定义 URL 下一并锁定）
-        svcPortLocked(key) {
-            if (this.isSvcCustom(key)) return true;
-            const d = this.services[key].data;
-            return !!(d && d.running);
-        },
-        svcPortTitle(key) {
-            if (this.isSvcCustom(key)) return "自定义URL模式下内置服务端口不生效";
-            const d = this.services[key].data;
-            return d && d.running ? "请先停止API服务再修改端口" : "";
         },
 
         async refreshSvc(key) {
@@ -377,53 +350,14 @@ function settingsPage() {
             SERVICE_DEFS.forEach(d => this.refreshSvc(d.key));
         },
         pollSvcStatuses() {
+            if (!this.apiOpen) return;     // 折叠区收起时看不到状态，不发请求
             if (document.hidden) return;   // 页面在后台时不发无谓请求
             this.refreshAllSvc();
         },
-
-        async startSvc(key) {
-            if (this.isSvcCustom(key)) {
-                showToast("自定义URL模式下不可操作内置服务", "提示");
-                return;
-            }
-            if (this.services[key].starting) return;
-            this.services[key].starting = true;
-            try {
-                // 首次启动需自解压最长可达 60s，覆盖默认 15s 超时
-                const resp = await api(`/api/${key}/start`, { method: "POST", timeout: 70000 });
-                showToast(resp.msg, "成功", "success");
-            } catch (e) {
-                showToast(e.message, "错误", "error");
-            } finally {
-                this.services[key].starting = false;
-                this.refreshSvc(key);
-            }
-        },
-
-        // 停止属危险操作（该平台搜索/下载立即可用性受影响）：uiConfirm danger 二次确认
-        async stopSvc(key) {
-            if (this.isSvcCustom(key)) {
-                showToast("自定义URL模式下不可操作内置服务", "提示");
-                return;
-            }
-            const name = svcDef(key).name;
-            const ok = await uiConfirm({
-                title: `停止${name}`,
-                message: `确定停止${name}吗？停止期间该平台的搜索与下载将不可用。`,
-                confirmText: "停止",
-                danger: true,
-            });
-            if (!ok) return;
-            this.services[key].stopping = true;
-            try {
-                const resp = await api(`/api/${key}/stop`, { method: "POST" });
-                showToast(resp.msg, "成功", "success");
-            } catch (e) {
-                showToast(e.message, "错误", "error");
-            } finally {
-                this.services[key].stopping = false;
-                this.refreshSvc(key);
-            }
+        // 展开折叠区时立即取一次状态，不用等下一轮轮询
+        toggleApiFold() {
+            this.apiOpen = !this.apiOpen;
+            if (this.apiOpen) this.refreshAllSvc();
         },
     };
 }

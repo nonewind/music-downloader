@@ -100,23 +100,16 @@
                 <span class="org-stat-label">最近清理</span>
                 <span class="org-stat-value" x-text="lastCleanText()" :title="lastCleanText()"></span>
             </div>
-            <div class="org-stat" x-show="job">
-                <span class="org-stat-label">当前任务</span>
-                <span class="org-stat-value"><span class="ui-badge ui-badge-info" x-text="jobLabel()"></span></span>
-            </div>
         </div>
     </div>
 
     <!-- 3. 扫描条 -->
     <div class="org-scanbar">
-        {# 加载态按钮需动态内容（spinner+文案切换），ui.btn 宏的 label 是静态
-           文本节点、x-text 会整体替换按钮内容，故此类按钮手写 ui-btn 结构 #}
+        {# 扫描/清理进行中只置灰：进度统一由下方任务进度卡显示，按钮不再转圈 #}
         <button type="button" class="ui-btn ui-btn-primary"
-                :class="{ 'is-loading': scanning }"
                 :disabled="scanning || cleaning" @click="scan()">
-            <span class="ui-spinner" x-show="scanning"></span>
-            <i class="bi bi-search" x-show="!scanning"></i>
-            <span x-text="scanning ? '扫描中…' : '扫描下载目录'"></span>
+            <i class="bi bi-search"></i>
+            <span>扫描下载目录</span>
         </button>
         <span class="org-summary" x-show="loaded && scannedOnce && !scanning && !job">
             共 <b class="ui-mono" x-text="index.active"></b> 个索引文件 ·

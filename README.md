@@ -47,7 +47,7 @@
 | **找歌**（首页） | 搜索歌曲/专辑并下载；「我的歌单」管理关注的歌单（用链接添加、立即同步、自动同步开关、下载数量）；排行榜、热门歌单 |
 | **下载** | 「正在进行」的任务（暂停/继续/删除、暂停全部/继续全部）；「下载记录」（按状态筛选、失败重试、全部重试、删除）；「音质升级」 |
 | **整理** | 扫描下载目录里的重复文件和同一首歌的多个音质版本，勾选后清理 |
-| **设置** | 账号（添加、扫码登录、测试、导入导出）；常规、下载行为、音质、多账号、自动同步、API 服务 |
+| **设置** | 账号（添加、扫码登录、测试、导入导出）；常规（含折叠的「高级：API 服务」）、下载行为、音质、多账号、自动同步 |
 
 旧网址 `/discover`、`/playlists`、`/accounts` 会自动跳到新位置。
 
@@ -92,7 +92,7 @@ python -m venv .venv
 .venv/bin/python webapp/app.py
 ```
 
-> **macOS 说明**：内置 API 二进制仅提供 Windows / Linux x64 版本，macOS 需自行部署各平台 API 服务并在「设置 → API 服务」里填写自定义 API 服务地址。
+> **macOS 说明**：内置 API 二进制仅提供 Windows / Linux x64 版本，macOS 需自行部署各平台 API 服务并在「设置 → 常规 → 高级：API 服务」里填写自定义 API 服务地址。
 
 ## 快速上手
 
@@ -110,16 +110,13 @@ python -m venv .venv
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `ncm_api_auto_start` | `true` | 是否随程序启动自动拉起 NeteaseCloudMusicApi 服务（`false` 为按需懒启动，重启生效） |
-| `ncm_api_port` | `45601` | NeteaseCloudMusicApi 服务端口（0 表示随机空闲端口，运行中不可修改） |
+| `ncm_api_port` | `45601` | NeteaseCloudMusicApi 服务端口（0 表示随机空闲端口；修改后需重启程序生效） |
 | `use_custom_api_url` | `false` | 是否使用自定义 API 服务 URL（勾选时内置服务禁用） |
 | `custom_api_url` | （空） | 自定义 API 服务 URL，`use_custom_api_url` 为 `true` 时生效 |
-| `qq_api_auto_start` | `true` | 是否随程序启动自动拉起 QQ 音乐 API 服务（`false` 为按需懒启动，重启生效） |
-| `qq_api_port` | `45602` | QQ 音乐 API 服务端口（0 表示随机空闲端口） |
+| `qq_api_port` | `45602` | QQ 音乐 API 服务端口（0 表示随机空闲端口；修改后需重启程序生效） |
 | `use_custom_qq_api_url` | `false` | 是否使用自定义 QQ 音乐 API 服务 URL（勾选时内置服务禁用） |
 | `qq_api_base_url` | `http://127.0.0.1:45602` | 自定义 QQ 音乐 API 服务 URL，`use_custom_qq_api_url` 为 `true` 时生效 |
-| `kugou_api_auto_start` | `true` | 是否随程序启动自动拉起酷狗音乐 API 服务（`false` 为按需懒启动，重启生效） |
-| `kugou_api_port` | `45603` | 酷狗音乐 API 服务端口（0 表示随机空闲端口） |
+| `kugou_api_port` | `45603` | 酷狗音乐 API 服务端口（0 表示随机空闲端口；修改后需重启程序生效） |
 | `use_custom_kugou_api_url` | `false` | 是否使用自定义酷狗音乐 API 服务 URL（勾选时内置服务禁用） |
 | `kugou_api_base_url` | `http://127.0.0.1:45603` | 自定义酷狗音乐 API 服务 URL，`use_custom_kugou_api_url` 为 `true` 时生效 |
 | `web_port` | `127.0.0.1:45600` | Web 服务监听地址（`host:port` 格式，如 `127.0.0.1:45600`（仅本机）或 `*:45600`（所有网卡），修改后需重启服务）。新装默认仅本机；从旧版本升级的数据库保留原值（旧默认 `*:45600` 即所有网卡），见下方「访问控制与安全」。环境变量 `WEB_PORT` 可临时覆盖（不写库） |

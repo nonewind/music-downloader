@@ -3,6 +3,7 @@
 覆盖：
 - /api/discover/search：items 附 failed/fail_msg 标记（active 任务优先于 failed）
 - /api/discover/song-flags：仅查本地库的批量标记刷新（已下载/进行中/失败）
+- /api/discover/playlist-detail：榜单/歌单详情的歌曲列表带同样的标记
 
 搜索接口的桩手法与 test_quality_names.py 一致：monkeypatch _get_client，
 避免触桥（本地测试环境起不了平台 API 二进制）。
@@ -104,3 +105,49 @@ def test_song_flags_empty_ids(client):
     resp = client.post("/api/discover/song-flags", json={"platform": "qq", "ids": []})
     assert resp.get_json()["code"] == 0
     assert resp.get_json()["data"]["failed"] == {}
+
+
+# ======================================================================
+# /api/discover/playlist-detail
+# ======================================================================
+class _DetailClient:
+    def __init__(self, detail):
+        self._detail = detail
+        self.asked = None
+
+    def get_playlist_detail(self, playlist_id, limit=200):
+        self.asked = (playlist_id, limit)
+        return self._detail
+
+
+def _detail(client, monkeypatch, detail, pid="62"):
+    stub = _DetailClient(detail)
+    monkeypatch.setattr(api_module, "_get_client", lambda platform="netease": stub)
+    return client.get(f"/api/discover/playlist-detail?platform=qq&id={pid}"), stub
+
+
+def test_playlist_detail_marks_songs(client, monkeypatch):
+    _add_song("a1", "success")
+    _add_song("a2", "failed", error_msg="版权限制")
+    tracks = [{"id": sid, "name": "歌", "artists": "人", "fee": 0} for sid in ("a1", "a2", "a3")]
+    r, stub = _detail(client, monkeypatch, {"name": "热歌榜", "track_count": 300, "tracks": tracks})
+
+    body = r.get_json()
+    assert body["code"] == 0
+    assert stub.asked == (62, 200)
+    d = body["data"]
+    assert d["name"] == "热歌榜"
+    assert d["track_count"] == 300
+    by_id = {i["id"]: i for i in d["items"]}
+    assert by_id["a1"]["downloaded"] is True
+    assert by_id["a2"]["failed"] is True and by_id["a2"]["fail_msg"] == "版权限制"
+    assert by_id["a3"]["downloaded"] is False and by_id["a3"]["failed"] is False
+    assert d["downloaded_qualities"] == {"a1": "exhigh"}
+
+
+def test_playlist_detail_empty_and_bad_id(client, monkeypatch):
+    r, _ = _detail(client, monkeypatch, {})
+    assert r.get_json()["code"] == 1
+
+    r, _ = _detail(client, monkeypatch, {}, pid="abc")
+    assert r.status_code == 400

@@ -1088,7 +1088,7 @@ def save_settings():
 
     请求体：key-value 字典，仅更新提交的字段。
     web_port 修改后需重启服务才生效。
-    ncm_api_port 修改需在API服务停止状态下进行。
+    三个 API 服务端口只在程序启动时读取，修改后需重启程序生效。
     """
     from models import DEFAULT_SETTINGS
     data = _json_body()
@@ -1116,17 +1116,9 @@ def save_settings():
             if url_err:
                 return jsonify({"code": 1, "msg": url_err}), 400
 
-    # 端口变化时校验：API服务运行中禁止修改端口（仅当请求体携带该字段时校验，
-    # 避免裸 API 部分更新被误拦）
-    for port_key, bridge_mod, label in (
-            ("ncm_api_port", bridge, "API服务"),
-            ("qq_api_port", qq_bridge, "QQ音乐API服务"),
-            ("kugou_api_port", kugou_bridge, "酷狗音乐API服务")):
-        if (port_key in data and str(data[port_key]) != Setting.get(port_key, "")
-                and bridge_mod.get_bridge()._is_alive()):
-            return jsonify({"code": 1, "msg": f"{label}运行中，请先停止服务再修改端口"}), 400
-
     port_changed = False
+    # API 服务端口只在程序启动时读取（不再提供手动启停），改了只提示重启
+    api_port_changed = False
     warns = []
     for key, value in data.items():
         if key not in allowed:
@@ -1151,6 +1143,9 @@ def save_settings():
             warns.append(f"{key} 档位值非法已重置")
         if key == "web_port" and str(value) != Setting.get("web_port", ""):
             port_changed = True
+        if key in ("ncm_api_port", "qq_api_port", "kugou_api_port") \
+                and str(value) != Setting.get(key, ""):
+            api_port_changed = True
         Setting.set(key, str(value))
 
     # 刷新调度
@@ -1159,6 +1154,8 @@ def save_settings():
     msg = "设置已保存"
     if port_changed:
         msg += "（Web监听地址修改需重启服务生效）"
+    if api_port_changed:
+        msg += "（API服务端口修改需重启程序生效）"
     if warns:
         msg += "；" + "；".join(warns)
     return jsonify({"code": 0, "msg": msg})
@@ -1190,9 +1187,8 @@ def save_access_token():
 # ======================================================================
 # 内置 API 服务控制（ncm / qq / kugou 三平台同构，表驱动注册）
 # ----------------------------------------------------------------------
-#   GET  /api/<prefix>/status   服务状态
-#   POST /api/<prefix>/start    启动（幂等；失败 500 + 原因）
-#   POST /api/<prefix>/stop     停止（幂等）
+#   GET  /api/<prefix>/status   服务状态（服务由程序启动时及用到时自动拉起，
+#                               不提供手动启停接口）
 # ======================================================================
 # 路由前缀 → (bridge 模块, 服务中文名)。bridge 模块在请求时取 get_bridge()，
 # 保证始终拿到 main() 按用户配置创建的单例
@@ -1207,20 +1203,7 @@ def _register_bridge_routes(prefix: str, bridge_mod, label: str) -> None:
     def status():
         return jsonify({"code": 0, "data": bridge_mod.get_bridge().status()})
 
-    def start():
-        try:
-            url = bridge_mod.get_bridge().start()
-            return jsonify({"code": 0, "msg": f"{label}已启动", "data": {"base_url": url}})
-        except RuntimeError as e:
-            return jsonify({"code": 1, "msg": str(e)}), 500
-
-    def stop():
-        bridge_mod.get_bridge().stop()
-        return jsonify({"code": 0, "msg": f"{label}已停止"})
-
     api_bp.add_url_rule(f"/{prefix}/status", f"{prefix}_status", status)
-    api_bp.add_url_rule(f"/{prefix}/start", f"{prefix}_start", start, methods=["POST"])
-    api_bp.add_url_rule(f"/{prefix}/stop", f"{prefix}_stop", stop, methods=["POST"])
 
 
 for _prefix, (_mod, _label) in _BRIDGE_SERVICES.items():
@@ -1817,12 +1800,33 @@ def discover_search():
         logger.exception("搜索失败: %s", e)
         return jsonify({"code": 1, "msg": str(e)})
 
-    # 标记已下载/进行中/失败（仅歌曲模式需要；song_id 统一 str + platform 维度查询）
+    # 标记已下载/进行中/失败（仅歌曲模式需要）
+    result_items, downloaded_qualities = _mark_song_items(items, platform)
+    return jsonify({
+        "code": 0,
+        "data": {
+            "items": result_items,
+            "total": total,
+            "page": page,
+            "pages": pages,
+            "type": "song",
+            # 新增字段（TASK-04b）：已下载歌曲音质映射，原字段不动向后兼容
+            "downloaded_qualities": downloaded_qualities,
+        },
+    })
+
+
+def _mark_song_items(items: list[dict], platform: str) -> tuple[list[dict], dict]:
+    """给一批歌曲行打上已下载/失败标记（搜索结果与歌单详情共用）
+
+    song_id 统一 str + platform 维度查询。
+    Returns:
+        (带 downloaded/failed/fail_msg 字段的新行列表, downloaded_qualities)
+    """
     flags = _song_flags([str(t["id"]) for t in items if t.get("id")], platform)
     success_ids = set(flags["downloaded_ids"])
     active_ids = set(flags["active_ids"])
     failed_map = flags["failed"]
-    downloaded_qualities = flags["downloaded_qualities"]
 
     result_items = []
     for t in items:
@@ -1833,15 +1837,50 @@ def discover_search():
         t2["failed"] = sid_str in failed_map
         t2["fail_msg"] = failed_map.get(sid_str, "")
         result_items.append(t2)
+    return result_items, flags["downloaded_qualities"]
+
+
+# 歌单详情一次最多展示的歌曲数（与 /discover/song-flags 的 ids 上限一致，
+# 行状态刷新能覆盖整张列表）
+_PLAYLIST_DETAIL_LIMIT = 200
+
+
+@api_bp.route("/discover/playlist-detail")
+def discover_playlist_detail():
+    """榜单/热门歌单详情：歌曲列表 + 已下载标记（展示用，不下载、不关注）
+
+    参数：platform, id（榜单 ID 或歌单 ID，三平台 get_playlist_detail 都按 ID 自动分流）
+    返回 data：
+        name, track_count（歌单实际总数，可能大于返回条数）,
+        items[{id,name,artists,album?,fee?,downloaded,failed,fail_msg}],
+        downloaded_qualities
+    """
+    platform = _req_platform()
+    # 1. 校验 ID（三平台的歌单/榜单 ID 都是数字）
+    try:
+        pid = int(request.args.get("id", ""))
+    except ValueError:
+        return jsonify({"code": 1, "msg": "歌单 ID 不正确"}), 400
+
+    # 2. 取歌曲列表
+    try:
+        client = _get_client(platform)
+        detail = client.get_playlist_detail(pid, limit=_PLAYLIST_DETAIL_LIMIT)
+    except Exception as e:
+        logger.exception("获取歌单详情失败: %s", e)
+        return jsonify({"code": 1, "msg": str(e)})
+    if not detail:
+        return jsonify({"code": 1, "msg": "没有取到这个歌单的歌曲列表"})
+
+    # 3. 打已下载标记
+    tracks = detail["tracks"][:_PLAYLIST_DETAIL_LIMIT]
+    items, downloaded_qualities = _mark_song_items(tracks, platform)
     return jsonify({
         "code": 0,
         "data": {
-            "items": result_items,
-            "total": total,
-            "page": page,
-            "pages": pages,
-            "type": "song",
-            # 新增字段（TASK-04b）：已下载歌曲音质映射，原字段不动向后兼容
+            "name": detail["name"],
+            "track_count": detail["track_count"],
+            "items": items,
             "downloaded_qualities": downloaded_qualities,
         },
     })

@@ -121,7 +121,7 @@ def _read_tag(tags, keys: tuple) -> str:
     return ""
 
 
-def _build_entry(path: Path, ext: str) -> FileEntry:
+def build_entry(path: Path, ext: str) -> FileEntry:
     """构造单个 FileEntry：stat + mutagen 读 tag/音频参数，失败容错"""
     try:
         stat = path.stat()
@@ -204,7 +204,7 @@ def scan_directory(root: Path) -> list[FileEntry]:
             ext = path.suffix.lower()
             if ext not in AUDIO_EXTS:
                 continue
-            entries.append(_build_entry(path, ext))
+            entries.append(build_entry(path, ext))
     return entries
 
 

@@ -1,4 +1,5 @@
 // 找歌页（首页）：搜索 + 我的歌单 + 官方排行榜 + 热门歌单
+// 点榜单/热门歌单封面弹出歌曲列表（详情弹窗 plDetail），单曲可直接下载。
 //
 // 布局：搜索框置顶（默认焦点）；搜索之后下面只显示结果（一行一首歌，
 // 右边直接是状态：下载 / 排队中 / 下载中 62% / 已下载 / 失败可重试）；
@@ -51,14 +52,34 @@ function discoverPage() {
         },
         searchLoading: false,
         allBusy: false,
+
+        // ---- 榜单/歌单详情弹窗（$store.modals.plDetail） ----
+        // card: 被点开的封面卡（弹窗里的「关注」直接复用 addFromCard）；
+        // kind: official 榜单 / user 热门歌单
+        detail: {
+            card: null, kind: "", name: "", trackCount: 0,
+            items: [], qualities: {}, loading: false,
+        },
         syncing: false,       // 「立即同步」全部歌单进行中
 
         // 队列活跃→空闲跃迁（app.js renderStatusbar 广播）：仅查本地库刷新
         // 当前页行状态（不重调平台搜索），让已入队歌曲尽快落到终态
         // （已下载 / 失败+原因徽标），失败原因不再只藏在下载历史页
         async _onQueueIdle() {
+            // 搜索结果
             const s = this.search;
-            if (!s.searched || !s.items.length || this.searchLoading) return;
+            if (s.searched && s.items.length && !this.searchLoading) {
+                await this._refreshFlags(s);
+            }
+            // 打开着的详情弹窗
+            const d = this.detail;
+            if (Alpine.store("modals").plDetail && d.items.length && !d.loading) {
+                await this._refreshFlags(d);
+            }
+        },
+
+        // 查本地库刷新一批行的状态；s 是 search 或 detail（都有 items / qualities）
+        async _refreshFlags(s) {
             try {
                 const data = await api("/api/discover/song-flags", {
                     method: "POST",
@@ -374,10 +395,10 @@ function discoverPage() {
         // 单首下载（不受排除过滤限制）。已下载歌曲先二次确认（双文案：
         // 已有档位取 downloaded_qualities 角标，当前设置档位取全局设置缓存；
         // 未知则省略括号），确认后 force=true 重新入队。请求参数与旧页一致。
-        async downloadSong(s) {
+        async downloadSong(s, qualities) {
             let force = false;
             if (s.downloaded) {
-                const existQ = get_quality_name(this.search.qualities[String(s.id)] || "");
+                const existQ = get_quality_name(qualities[String(s.id)] || "");
                 const curQ = get_current_quality_name(this.platform);
                 const msg = `《${s.name}》已下载过${existQ ? `（${existQ}）` : ""}。` +
                     `将${curQ ? `以当前设置音质（${curQ}）` : ""}重新下载？\n` +
@@ -489,6 +510,44 @@ function discoverPage() {
             if (n >= 100000000) return (n / 100000000).toFixed(1) + "亿";
             if (n >= 10000) return (n / 10000).toFixed(1) + "万";
             return String(n);
+        },
+
+        // 点封面：弹窗显示这个榜单/歌单的歌曲列表（非歌曲榜没有歌曲，不打开）
+        async openDetail(card, kind) {
+            if (card.addable === false) return;
+            const d = this.detail;
+            d.card = card;
+            d.kind = kind;
+            d.name = card.name;
+            d.trackCount = 0;
+            d.items = [];
+            d.qualities = {};
+            d.loading = true;
+            Alpine.store("modals").plDetail = true;
+            try {
+                const params = new URLSearchParams({ id: card.id, platform: this.platform });
+                const data = await api("/api/discover/playlist-detail?" + params.toString());
+                // 弹窗已关掉或又点开了别的卡片：丢弃这次结果
+                if (d.card !== card) return;
+                d.name = data.data.name || card.name;
+                d.trackCount = data.data.track_count;
+                d.items = data.data.items;
+                d.qualities = data.data.downloaded_qualities;
+            } catch (e) {
+                showToast(e.message, "错误");
+            } finally {
+                if (d.card === card) d.loading = false;
+            }
+        },
+
+        // 详情弹窗顶部第二行：共 N 首（只显示前 M 首时说明）
+        get detailSub() {
+            const d = this.detail;
+            if (d.loading) return "";      // 加载提示只在下面列表处显示一次
+            const n = d.items.length;
+            if (!n) return "没有歌曲";
+            if (d.trackCount > n) return "前 " + n + " 首 / 共 " + d.trackCount + " 首";
+            return "共 " + n + " 首";
         },
 
         async addFromCard(item, type) {

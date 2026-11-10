@@ -47,6 +47,7 @@ from core.providers.base import MusicProvider
 from core.providers.netease import NeteaseProvider
 from core.providers.qq.client import merge_refreshed_cookie
 from core.providers import get_provider
+from organizer_manager import register_downloaded_file
 from paths import APP_ROOT, output_dir_path
 
 logger = logging.getLogger(__name__)
@@ -2051,6 +2052,15 @@ class TaskManager:
                 if task.song_name != sname:
                     task.song_name = sname
                 db.session.commit()
+
+            # 登记进本地文件索引（下载历史显示「文件在库」，不必等扫描）。
+            # 下载本身已提交成功，登记失败只记警告，不能把完成的任务拖成失败
+            if path.exists():
+                try:
+                    register_downloaded_file(path, account.platform, str(sid))
+                except Exception as e:
+                    db.session.rollback()
+                    logger.warning("下载完成登记索引失败 %s: %s", path, e)
             logger.info("任务完成: %s - %s (账号: %s)", artists, sname, account.name)
 
     def _mark_failed(

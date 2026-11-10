@@ -3,6 +3,43 @@
 {% import "macros/ui.html" as ui %}
 {% block title %}找歌 - Deen音乐下载器{% endblock %}
 {% block content %}
+{# 歌曲行：搜索结果与榜单/歌单详情弹窗共用；行变量固定为 s，
+   qualities 是该列表已下载音质映射的表达式（重新下载确认框用） #}
+{% macro song_row(qualities) -%}
+<div class="list-row" :class="{ 'is-active': rowState(s) === 'downloading' }">
+    <div class="list-main">
+        <div class="list-title">
+            <span class="ui-truncate" x-text="s.name" :title="s.name"></span>
+            <span class="tag-vip" x-show="s.fee === 1">VIP</span>
+        </div>
+        <div class="list-sub" x-show="rowState(s) !== 'failed' && rowState(s) !== 'downloading'"
+             x-text="s.artists + (s.album ? ' · ' + s.album : '')"></div>
+        <div class="list-sub is-fail" x-show="rowState(s) === 'failed'"
+             x-text="'下载失败：' + (s.fail_msg || '原因未知')" :title="s.fail_msg"></div>
+        <div class="list-prog" x-show="rowState(s) === 'downloading'">
+            <span :style="'width:' + rowPct(s) + '%'"></span>
+        </div>
+    </div>
+    <div class="list-side">
+        <span class="ui-spinner" x-show="rowState(s) === 'busy'"></span>
+        <span class="list-state is-on" x-show="rowState(s) === 'downloading'" x-text="'下载中 ' + rowPct(s) + '%'"></span>
+        <span class="list-state" x-show="rowState(s) === 'pending'">排队中</span>
+        <span class="list-state" x-show="rowState(s) === 'paused'">已暂停</span>
+        <button type="button" class="ui-btn ui-btn-danger" x-show="rowState(s) === 'failed'"
+                @click="downloadSong(s, {{ qualities }})">重试</button>
+        <span class="list-state" x-show="rowState(s) === 'done'"><i class="bi bi-check2"></i> 已下载</span>
+        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="rowState(s) === 'done'"
+                title="重新下载" :aria-label="'重新下载 ' + s.name" @click="downloadSong(s, {{ qualities }})">
+            <i class="bi bi-arrow-repeat"></i>
+        </button>
+        <button type="button" class="ui-btn ui-btn-soft" x-show="rowState(s) === 'none'"
+                :aria-label="'下载 ' + s.name" @click="downloadSong(s, {{ qualities }})">
+            <i class="bi bi-download"></i><span class="hide-sm">下载</span>
+        </button>
+    </div>
+</div>
+{%- endmacro %}
+
 <style>
     /* 找歌页局部样式（disc- 前缀；通用积木 list-/chip/sec- 在 app.css） */
     .disc-search { display: flex; gap: 12px; margin-bottom: 12px; }
@@ -30,6 +67,19 @@
     .disc-cardtitle { font-size: 15px; font-weight: 600; }
     .disc-cardmeta { font-size: 13px; color: var(--ui-text-2); }
     .disc-card .ui-btn { width: 100%; }
+    /* 封面按钮：点开歌曲列表；非歌曲榜禁用（不可点、不变手型） */
+    .disc-coverbtn { display: block; width: 100%; padding: 0; border: 0; background: none; border-radius: var(--ui-r-m); cursor: pointer; transition: opacity .15s; }
+    .disc-coverbtn:hover:not(:disabled) { opacity: .85; }
+    .disc-coverbtn:disabled { cursor: default; }
+
+    /* 榜单/歌单详情弹窗：比默认弹窗宽，列表在弹窗内滚动 */
+    #plDetail-mask .ui-modal { width: 640px; }
+    #plDetail-mask .ui-modal-body { padding: 0; }
+    .disc-dhead { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--ui-border); }
+    .disc-dhead img, .disc-dhead .disc-cover-ph { width: 64px; height: 64px; flex-shrink: 0; font-size: 22px; }
+    .disc-dhead .ui-btn { flex-shrink: 0; }
+    .disc-dlist { max-height: 60vh; overflow-y: auto; }
+    .disc-dlist .list-card { border: 0; border-radius: 0; }
     .disc-loading { padding: 12px 0; font-size: 15px; color: var(--ui-text-2); }
     .disc-filterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
     .disc-filterrow label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ui-text-2); white-space: nowrap; }
@@ -102,38 +152,7 @@
         {# 歌曲 / 歌手模式：一行一首歌（歌手搜索后端同样返回单曲列表） #}
         <div class="list-card fade-in" x-show="!searchIsAlbum && !searchLoading && search.items.length">
             <template x-for="(s, idx) in (searchIsAlbum ? [] : search.items)" :key="String(s.id) + ':' + idx">
-                <div class="list-row" :class="{ 'is-active': rowState(s) === 'downloading' }">
-                    <div class="list-main">
-                        <div class="list-title">
-                            <span class="ui-truncate" x-text="s.name" :title="s.name"></span>
-                            <span class="tag-vip" x-show="s.fee === 1">VIP</span>
-                        </div>
-                        <div class="list-sub" x-show="rowState(s) !== 'failed' && rowState(s) !== 'downloading'"
-                             x-text="s.artists + (s.album ? ' · ' + s.album : '')"></div>
-                        <div class="list-sub is-fail" x-show="rowState(s) === 'failed'"
-                             x-text="'下载失败：' + (s.fail_msg || '原因未知')" :title="s.fail_msg"></div>
-                        <div class="list-prog" x-show="rowState(s) === 'downloading'">
-                            <span :style="'width:' + rowPct(s) + '%'"></span>
-                        </div>
-                    </div>
-                    <div class="list-side">
-                        <span class="ui-spinner" x-show="rowState(s) === 'busy'"></span>
-                        <span class="list-state is-on" x-show="rowState(s) === 'downloading'" x-text="'下载中 ' + rowPct(s) + '%'"></span>
-                        <span class="list-state" x-show="rowState(s) === 'pending'">排队中</span>
-                        <span class="list-state" x-show="rowState(s) === 'paused'">已暂停</span>
-                        <button type="button" class="ui-btn ui-btn-danger" x-show="rowState(s) === 'failed'"
-                                @click="downloadSong(s)">重试</button>
-                        <span class="list-state" x-show="rowState(s) === 'done'"><i class="bi bi-check2"></i> 已下载</span>
-                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="rowState(s) === 'done'"
-                                title="重新下载" :aria-label="'重新下载 ' + s.name" @click="downloadSong(s)">
-                            <i class="bi bi-arrow-repeat"></i>
-                        </button>
-                        <button type="button" class="ui-btn ui-btn-soft" x-show="rowState(s) === 'none'"
-                                :aria-label="'下载 ' + s.name" @click="downloadSong(s)">
-                            <i class="bi bi-download"></i><span class="hide-sm">下载</span>
-                        </button>
-                    </div>
-                </div>
+                {{ song_row('search.qualities') }}
             </template>
         </div>
 
@@ -233,12 +252,15 @@
         <div class="disc-cards" x-show="!topLoading && toplists.length">
             <template x-for="t in toplists" :key="String(t.id)">
                 <div class="disc-card">
-                    <template x-if="t.cover_img_url">
-                        <img class="disc-cover" :src="t.cover_img_url" :alt="t.name" loading="lazy">
-                    </template>
-                    <template x-if="!t.cover_img_url">
-                        <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
-                    </template>
+                    <button type="button" class="disc-coverbtn" :disabled="t.addable === false"
+                            :aria-label="'查看 ' + t.name + ' 的歌曲'" @click="openDetail(t, 'official')">
+                        <template x-if="t.cover_img_url">
+                            <img class="disc-cover" :src="t.cover_img_url" :alt="t.name" loading="lazy">
+                        </template>
+                        <template x-if="!t.cover_img_url">
+                            <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
+                        </template>
+                    </button>
                     <div>
                         <p class="disc-cardtitle ui-truncate" x-text="t.name" :title="t.name"></p>
                         <p class="disc-cardmeta ui-truncate" x-text="cardMeta(t, 'toplist')"></p>
@@ -287,12 +309,15 @@
             <div class="disc-cards" x-show="!hotLoading && hotItems.length">
                 <template x-for="p in hotItems" :key="String(p.id)">
                     <div class="disc-card">
-                        <template x-if="p.cover_img_url">
-                            <img class="disc-cover" :src="p.cover_img_url" :alt="p.name" loading="lazy">
-                        </template>
-                        <template x-if="!p.cover_img_url">
-                            <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
-                        </template>
+                        <button type="button" class="disc-coverbtn"
+                                :aria-label="'查看 ' + p.name + ' 的歌曲'" @click="openDetail(p, 'user')">
+                            <template x-if="p.cover_img_url">
+                                <img class="disc-cover" :src="p.cover_img_url" :alt="p.name" loading="lazy">
+                            </template>
+                            <template x-if="!p.cover_img_url">
+                                <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
+                            </template>
+                        </button>
                         <div>
                             <p class="disc-cardtitle ui-truncate" x-text="p.name" :title="p.name"></p>
                             <p class="disc-cardmeta ui-truncate" x-text="cardMeta(p, 'hot')"></p>
@@ -349,6 +374,39 @@
     {{ ui.btn('添加', 'primary', attrs={':disabled': 'addBusy', ':class': "{ 'is-loading': addBusy }", '@click': 'confirmAdd()'}) }}
     {% endset %}
     {{ ui.modal('addPl', '添加歌单', add_body, add_footer) }}
+
+    {# 6. 榜单/歌单详情弹窗：顶部信息 + 关注；下面是歌曲列表（行与搜索结果同一个宏） #}
+    {% set detail_body %}
+    <div class="disc-dhead" x-show="detail.card">
+        <template x-if="detail.card && detail.card.cover_img_url">
+            <img class="disc-cover" :src="detail.card.cover_img_url" :alt="detail.name">
+        </template>
+        <template x-if="detail.card && !detail.card.cover_img_url">
+            <div class="disc-cover-ph"><i class="bi bi-music-note-beamed"></i></div>
+        </template>
+        <div class="list-main">
+            <div class="list-title"><span class="ui-truncate" x-text="detail.name" :title="detail.name"></span></div>
+            <div class="list-sub" x-text="detailSub"></div>
+        </div>
+        <button type="button" class="ui-btn ui-btn-sm" x-show="detail.card"
+                :class="detail.card ? cardBtnCls(detail.card) : ''"
+                :disabled="!!(detail.card && (isAdded(detail.card.id) || detail.card.busy))"
+                @click="addFromCard(detail.card, detail.kind)">
+            <span class="ui-spinner" x-show="detail.card && detail.card.busy"></span>
+            <template x-if="detail.card && !detail.card.busy && isAdded(detail.card.id)"><span>已关注</span></template>
+            <template x-if="detail.card && !detail.card.busy && !isAdded(detail.card.id)"><span><i class="bi bi-plus-lg"></i> 关注</span></template>
+        </button>
+    </div>
+    <div class="disc-dlist">
+        <div class="disc-loading" style="padding: 16px 20px" x-show="detail.loading">加载中…</div>
+        <div class="list-card" x-show="!detail.loading && detail.items.length">
+            <template x-for="(s, idx) in detail.items" :key="String(s.id) + ':' + idx">
+                {{ song_row('detail.qualities') }}
+            </template>
+        </div>
+    </div>
+    {% endset %}
+    {{ ui.modal('plDetail', '歌曲列表', detail_body) }}
 </div>
 {% endblock %}
 

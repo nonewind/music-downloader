@@ -21,20 +21,8 @@ PLATFORM_ROUTES = [
 
 
 class _StubBridge:
-    def __init__(self, fail=False):
-        self.fail = fail
-        self.stopped = False
-
     def status(self):
         return {"running": True, "port": 1}
-
-    def start(self):
-        if self.fail:
-            raise RuntimeError("boom")
-        return "http://127.0.0.1:1"
-
-    def stop(self):
-        self.stopped = True
 
 
 @pytest.fixture
@@ -52,30 +40,32 @@ def _patch_bridge(monkeypatch, attr, br):
 
 
 @pytest.mark.parametrize("prefix,attr,_platform,svc", PLATFORM_ROUTES)
-def test_bridge_status_start_stop(client, monkeypatch, prefix, attr, _platform, svc):
-    br = _StubBridge()
-    _patch_bridge(monkeypatch, attr, br)
+def test_bridge_status(client, monkeypatch, prefix, attr, _platform, svc):
+    _patch_bridge(monkeypatch, attr, _StubBridge())
 
     r = client.get(f"/api/{prefix}/status")
     assert r.status_code == 200
     assert r.get_json() == {"code": 0, "data": {"running": True, "port": 1}}
 
-    r = client.post(f"/api/{prefix}/start")
-    assert r.status_code == 200
-    assert r.get_json() == {"code": 0, "msg": f"{svc}已启动",
-                            "data": {"base_url": "http://127.0.0.1:1"}}
-
-    r = client.post(f"/api/{prefix}/stop")
-    assert r.get_json() == {"code": 0, "msg": f"{svc}已停止"}
-    assert br.stopped
-
 
 @pytest.mark.parametrize("prefix,attr,_platform,_svc", PLATFORM_ROUTES)
-def test_bridge_start_failure_returns_500(client, monkeypatch, prefix, attr, _platform, _svc):
-    _patch_bridge(monkeypatch, attr, _StubBridge(fail=True))
-    r = client.post(f"/api/{prefix}/start")
-    assert r.status_code == 500
-    assert r.get_json() == {"code": 1, "msg": "boom"}
+def test_bridge_start_stop_routes_removed(client, prefix, attr, _platform, _svc):
+    # 服务由程序自动启动，手动启停接口已删除
+    assert client.post(f"/api/{prefix}/start").status_code == 404
+    assert client.post(f"/api/{prefix}/stop").status_code == 404
+
+
+def test_save_api_port_only_hints_restart(client, webapp_app):
+    (app,) = webapp_app
+
+    class _TM:
+        def refresh_schedule(self):
+            pass
+    app.config["TASK_MANAGER"] = _TM()
+
+    body = client.put("/api/settings", json={"qq_api_port": "45612"}).get_json()
+    assert body["code"] == 0
+    assert "API服务端口修改需重启程序生效" in body["msg"]
 
 
 class _QrClient:

@@ -496,3 +496,57 @@ def test_recommend_reason_axis_priority():
                                                 size=100)]) == "码率更高 320kbps"
     # 全部并列 / 单元素 → 兜底文案
     assert recommend_reason(mp3_320, [mp3_320]) == "规格相同，任选其一"
+
+
+# ======================================================================
+# 下载完成登记（register_downloaded_file）
+# ======================================================================
+def test_register_downloaded_file_then_scan_reuses_row(tmp_path, manager, fake_audio_factory):
+    """下载完成登记 → 行 active 且带任务身份；随后扫描复用同一行，不多出一行"""
+    from organizer_manager import register_downloaded_file
+
+    fake_audio_factory(info=FakeInfo(length=200.0, bitrate=128000))
+    out_dir = _setup_out_dir(tmp_path)
+    p = _make_audio(out_dir, "Adele/21/Turning Tables-123.mp3")
+
+    register_downloaded_file(p, "qq", "123")
+    rows = LocalAudioFile.query.all()
+    assert len(rows) == 1
+    assert rows[0].path == str(p.resolve())
+    assert rows[0].status == "active"
+    assert (rows[0].platform, rows[0].song_id) == ("qq", "123")
+    assert rows[0].bitrate_kbps == 128
+
+    _run(manager, manager.submit_scan().id)
+    rows = LocalAudioFile.query.all()
+    assert len(rows) == 1
+    assert rows[0].status == "active"
+
+
+def test_register_downloaded_file_reactivates_trashed_row(tmp_path, webapp_app, fake_audio_factory):
+    """同路径旧行（进过回收站）→ 原地更新为 active"""
+    from organizer_manager import register_downloaded_file
+
+    fake_audio_factory()
+    out_dir = _setup_out_dir(tmp_path)
+    p = _make_audio(out_dir, "a-1.mp3")
+    db.session.add(LocalAudioFile(path=str(p.resolve()), status="trashed"))
+    db.session.commit()
+
+    register_downloaded_file(p, "netease", "1")
+    rows = LocalAudioFile.query.all()
+    assert len(rows) == 1
+    assert rows[0].status == "active"
+
+
+def test_register_downloaded_file_skips_when_organizer_busy(tmp_path, manager, fake_audio_factory):
+    """有整理任务在途 → 不登记（留给下次扫描）"""
+    from organizer_manager import register_downloaded_file
+
+    fake_audio_factory()
+    out_dir = _setup_out_dir(tmp_path)
+    p = _make_audio(out_dir, "a-1.mp3")
+    manager.submit_scan()          # 只提交不执行：任务停在 pending
+
+    register_downloaded_file(p, "netease", "1")
+    assert LocalAudioFile.query.count() == 0

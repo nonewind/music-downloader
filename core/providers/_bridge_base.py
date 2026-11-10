@@ -54,11 +54,10 @@ class ApiBridge:
     LOG_NAME: str = "api"
     DEFAULT_TIMEOUT: float = 60.0
 
-    def __init__(self, bin_dir: Path, auto_start: bool = True,
+    def __init__(self, bin_dir: Path,
                  timeout: float | None = None, port: int = 0):
         self.bin_dir = Path(bin_dir).resolve()
         self.bin_path = self.bin_dir / self.BINARIES.get(sys.platform, "")
-        self.auto_start = auto_start
         self.timeout = self.DEFAULT_TIMEOUT if timeout is None else timeout
         self._preferred_port = port
         self.proc: subprocess.Popen | None = None
@@ -98,7 +97,6 @@ class ApiBridge:
             "exe": str(self.bin_path),
             "platform": sys.platform,
             "bin_exists": self.bin_path.exists(),
-            "auto_start": self.auto_start,
         }
 
     def start(self) -> str:
@@ -249,14 +247,14 @@ class ApiBridge:
 
 
 def make_singleton_getter(cls: type[ApiBridge]):
-    """生成模块级 get_bridge(auto_start=..., port=...) 单例访问器（双检锁）"""
+    """生成模块级 get_bridge(port=...) 单例访问器（双检锁）"""
     state: dict[str, ApiBridge | None] = {"bridge": None}
     lock = threading.Lock()
 
-    def get_bridge(auto_start: bool | None = None, port: int | None = None) -> ApiBridge:
+    def get_bridge(port: int | None = None) -> ApiBridge:
         """获取全局唯一 bridge（不访问数据库，无需 app context）
 
-        auto_start / port 由 main() 在 app context 内读出后显式传入；main() 总是
+        port 由 main() 在 app context 内读出后显式传入；main() 总是
         首个调用者并传值，后续调用返回既有单例，参数被忽略。
         """
         if state["bridge"] is None:
@@ -264,7 +262,6 @@ def make_singleton_getter(cls: type[ApiBridge]):
                 if state["bridge"] is None:
                     state["bridge"] = cls(
                         bin_dir=default_bin_dir(),
-                        auto_start=(True if auto_start is None else auto_start),
                         port=(0 if port is None else port),
                     )
         return state["bridge"]

@@ -170,7 +170,7 @@ _TAGS_TTL = 86400         # 分类基本不变，24h
 
 def _gcid_cache_file() -> "object":
     """specialid→gcid 映射落盘文件（api/ 目录，与二进制同级）"""
-    return bridge.get_bridge(auto_start=False).bin_dir / ".kugou_gcid_cache.json"
+    return bridge.get_bridge().bin_dir / ".kugou_gcid_cache.json"
 
 
 def _load_gcid_cache() -> None:

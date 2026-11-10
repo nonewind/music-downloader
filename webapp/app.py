@@ -262,16 +262,14 @@ def serve(app, gateway_socket, gateway_prefix, host, port) -> None:
 
 
 def _start_api_bridges(bridges: list[tuple[str, Any]]) -> None:
-    """后台线程体：逐个拉起 auto_start 的 API 桥接。
+    """后台线程体：程序启动时逐个拉起三个 API 桥接。
 
     - start() 幂等且锁内串行；失败只记 WARNING（与原 main() 行为一致），
       不影响 Web 服务（已在 serve() 中就绪）
     - 客户端 base_url 属性自带惰性 start()：本线程尚未拉起时，首个业务
-      请求会在锁上等待/自行拉起，语义与 auto_start=false 的"用到再拉"一致
+      请求会在锁上等待/自行拉起
     """
     for name, br in bridges:
-        if not br.auto_start:
-            continue
         try:
             br.start()
             logger.info("%sAPI 服务就绪: %s", name, br.base_url)
@@ -286,28 +284,25 @@ def main() -> None:
     # Setting.get 需在 app context 内调用；读出后显式传入，
     # get_bridge 自身不碰数据库
     with app.app_context():
-        auto_start = Setting.get("ncm_api_auto_start", "true") == "true"
         try:
             ncm_api_port = int(Setting.get("ncm_api_port", "45601"))
         except (TypeError, ValueError):
             ncm_api_port = 45601
-        qq_auto_start = Setting.get("qq_api_auto_start", "true") == "true"
         try:
             qq_api_port = int(Setting.get("qq_api_port", "45602"))
         except (TypeError, ValueError):
             qq_api_port = 45602
-        kugou_auto_start = Setting.get("kugou_api_auto_start", "true") == "true"
         try:
             kugou_api_port = int(Setting.get("kugou_api_port", "45603"))
         except (TypeError, ValueError):
             kugou_api_port = 45603
-    ncm_bridge = bridge.get_bridge(auto_start=auto_start, port=ncm_api_port)
-    # atexit 注册必须写在 main() 内（此时单例已用真实 auto_start 创建）；
-    # 若放模块顶层会在 import 时以默认 auto_start=True 先建单例，忽略用户配置
+    ncm_bridge = bridge.get_bridge(port=ncm_api_port)
+    # atexit 注册必须写在 main() 内（此时单例已用真实端口创建）；
+    # 若放模块顶层会在 import 时以默认端口先建单例，忽略用户配置
     atexit.register(ncm_bridge.stop)
-    qq_bridge_inst = qq_bridge.get_bridge(auto_start=qq_auto_start, port=qq_api_port)
+    qq_bridge_inst = qq_bridge.get_bridge(port=qq_api_port)
     atexit.register(qq_bridge_inst.stop)
-    kugou_bridge_inst = kugou_bridge.get_bridge(auto_start=kugou_auto_start, port=kugou_api_port)
+    kugou_bridge_inst = kugou_bridge.get_bridge(port=kugou_api_port)
     atexit.register(kugou_bridge_inst.stop)
     # API 桥接后台异步启动：同步启动曾在 serve() 之前阻塞最长 6×60s，
     # 撞上飞牛启动脚本 60s socket 等待窗口导致应用启动失败（见

@@ -20,7 +20,7 @@ _PATTERNS = [
 ]
 
 # 已确认必返回布尔的写法（方法内部 return true/false 或 !!）
-_KNOWN_BOOL_CALLS = ("taskLocked(", "svcPortLocked(", "svcBusy(")
+_KNOWN_BOOL_CALLS = ("taskLocked(", "isSvcCustom(")
 
 
 def _is_safe(expr: str) -> bool:
