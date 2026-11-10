@@ -86,3 +86,30 @@ def test_migrate_layout_get_counts_old_structure(admin_client, tmp_path):
     body = resp.get_json()
     assert body["code"] == 0, body
     assert body["data"]["needs"] == 1
+
+
+def test_migrate_layout_ignores_year_suffixed_album_dir(admin_client, tmp_path):
+    """新结构目录「歌手/专辑 (年份)/歌名-ID.flac」不算旧结构 → needs 为 0。
+
+    回归背景：count_pending 把目标目录算成不带年份的「歌手/专辑」，而新
+    下载放在「专辑 (年份)」目录，导致每首新下载的歌都被误报为未迁移。
+    """
+    new_dir = tmp_path / "测试歌手" / "测试专辑 (2024)"
+    new_dir.mkdir(parents=True)
+    new_file = new_dir / "测试歌曲-10086.flac"
+    new_file.write_bytes(b"fake flac")
+
+    with admin_client.application.app_context():
+        _add_song(str(new_file))
+
+    resp = admin_client.get("/api/settings/migrate-layout")
+    body = resp.get_json()
+    assert body["code"] == 0, body
+    assert body["data"]["needs"] == 0
+
+    # POST 迁移也不能把它搬回无年份目录
+    resp = admin_client.post("/api/settings/migrate-layout")
+    body = resp.get_json()
+    assert body["code"] == 0, body
+    assert new_file.exists()
+    assert not (tmp_path / "测试歌手" / "测试专辑").exists()

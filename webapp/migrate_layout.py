@@ -35,6 +35,25 @@ def _dest_dir_for(song, output_dir: Path, sanitize) -> Path | None:
     return output_dir / primary / sanitize(album_dir)
 
 
+def _already_in_place(old: Path, dest_dir: Path) -> bool:
+    """文件是否已在新结构目录内
+
+    新下载的目录是「歌手/专辑 (年份)」，存量迁移目录是「歌手/专辑」
+    （Song 表不存年份）。两种都算已就位，否则每首新下载的歌都会被
+    当成未迁移，提示条数字越下越大，点迁移还会把它们搬回无年份目录。
+    """
+    parent = os.path.normpath(str(old.parent))
+    target = os.path.normpath(str(dest_dir))
+    # 步骤 1：目录完全一致（存量迁移过来的文件）
+    if parent == target:
+        return True
+    # 步骤 2：目录只多了「 (四位数年份)」后缀（新结构下载的文件）
+    parent_no_year = re.sub(r" \(\d{4}\)$", "", parent)
+    if parent_no_year == target:
+        return True
+    return False
+
+
 def count_pending(app) -> int:
     """统计需要迁移的存量文件数（设置页提示条用）：文件存在且
     不在目标专辑目录内的 success 记录数"""
@@ -51,7 +70,7 @@ def count_pending(app) -> int:
             if not dest:
                 continue
             old = Path(s.file_path)
-            if old.exists() and os.path.normpath(str(old.parent)) != os.path.normpath(str(dest)):
+            if old.exists() and not _already_in_place(old, dest):
                 count += 1
         return count
 
@@ -85,7 +104,7 @@ def run(app) -> tuple[int, int, int, int] | None:
                 if dest_dir is None:
                     skipped += 1
                     continue
-                if os.path.normpath(str(old.parent)) == os.path.normpath(str(dest_dir)):
+                if _already_in_place(old, dest_dir):
                     skipped += 1
                     continue
                 dest_dir.mkdir(parents=True, exist_ok=True)
