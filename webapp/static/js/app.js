@@ -1,6 +1,6 @@
 // 全局工具函数
 
-// 显示 toast 提示（Frontend 2.0：ui-toast 结构，右上角，3 秒自动消失）
+// 显示 toast 提示（ui-toast 结构，3 秒自动消失）
 // 签名兼容旧调用 (msg, title)；kind 可选 'info'|'success'|'warning'|'error'
 function showToast(msg, title = "提示", kind = "info") {
     const wrap = document.getElementById("global-toast");
@@ -134,114 +134,122 @@ function get_current_quality_name(platform) {
 // ============================================================
 // 全局下载状态轮询（所有页面通用）
 // ============================================================
-// 任何页面底部都有任务状态栏，
-// 因此轮询放在全局 app.js 中，而不是只在 dashboard.js 里。
+// 每个页面都有底部下载条和导航上的失败角标，所以轮询放在全局 app.js。
+// 结果同时写进 Alpine 的 queue 仓库，页面可以按歌曲查到自己的任务进度
+// （找歌页的搜索结果行用它显示“下载中 62%”）。
 async function refreshGlobalTaskStatus() {
     try {
         const data = await api("/api/tasks");
         const tasks = data.data || [];
-        // 底部状态栏：队列摘要 + 当前下载项
-        renderStatusbar(tasks, !!data.paused_all);
+        const failedCount = data.failed_count || 0;
+        const pausedAll = !!data.paused_all;
+
+        // 第 1 步：写入全局仓库（Alpine 还没启动时跳过，下一轮再写）
+        if (window.Alpine && Alpine.store("queue")) {
+            Alpine.store("queue").tasks = tasks;
+            Alpine.store("queue").failed = failedCount;
+        }
+
+        // 第 2 步：渲染下载条和失败角标
+        renderDlbar(tasks, pausedAll, failedCount);
+
+        // 第 3 步：广播队列变化，让页面刷新自己的行状态
+        broadcastQueueChange(tasks, pausedAll);
     } catch (e) {
-        // 静默失败：状态栏是辅助信息，不应弹错提示
+        // 静默失败：下载条是辅助信息，不应弹错提示
         console.error("刷新任务状态失败:", e);
     }
 }
 
-// ============================================================
-// 底部状态栏渲染（由 refreshGlobalTaskStatus 每 2 秒驱动）
-// ============================================================
-// 摘要段：下载中/排队/暂停分段计数（0 值段省略）；paused_all 优先展示
-// 当前段：第一个 downloading 任务的「歌名 - 第一位歌手」+ 迷你进度条
-function renderStatusbar(tasks, pausedAll) {
-    const summary = document.getElementById("statusSummary");
-    if (!summary) return;
-    const nDownloading = tasks.filter(t => t.status === "downloading").length;
-    const nPending = tasks.filter(t => t.status === "pending").length;
-    const nPaused = tasks.filter(t => t.status === "paused").length;
-    const hasActive = nDownloading + nPending + nPaused > 0;
+// 队列变化广播：
+//   md:task-finished  有任务从队列里消失（下完、失败或被删）
+//   md:queue-idle     队列从有任务变成全空
+// 找歌页监听这两个事件，只查本地库刷新搜索结果行的状态
+let _prevTaskPks = new Set();
+let _prevHasActive = false;
+function broadcastQueueChange(tasks, pausedAll) {
+    const pks = new Set(tasks.map(t => t.pk));
+    let someFinished = false;
+    for (const pk of _prevTaskPks) {
+        if (!pks.has(pk)) someFinished = true;
+    }
+    _prevTaskPks = pks;
+    if (someFinished) {
+        window.dispatchEvent(new CustomEvent("md:task-finished"));
+    }
 
-    // 活跃→空闲跃迁广播（含「已全部暂停」→非暂停态）：
-    // 发现页监听后刷新搜索行状态，让"已入队"的行尽快落到终态
-    // （成功=已下载 / 失败=未下载+失败徽标），失败原因不再只藏在历史页
-    if (renderStatusbar._prevHasActive && !hasActive && !pausedAll) {
+    const hasActive = tasks.length > 0;
+    if (_prevHasActive && !hasActive && !pausedAll) {
         window.dispatchEvent(new CustomEvent("md:queue-idle"));
     }
-    renderStatusbar._prevHasActive = hasActive || pausedAll;
+    _prevHasActive = hasActive || pausedAll;
+}
 
-    if (pausedAll) {
-        summary.innerHTML = '<i class="bi bi-pause-circle"></i> 已全部暂停';
-    } else if (hasActive) {
-        const segs = [];
-        if (nDownloading) segs.push("下载中 " + nDownloading);
-        if (nPending) segs.push("排队 " + nPending);
-        if (nPaused) segs.push("暂停 " + nPaused);
-        summary.innerHTML = '<i class="bi bi-download"></i> ' + segs.join(" · ");
-    } else {
-        summary.innerHTML = '<i class="bi bi-check-circle"></i> 队列空闲';
+// ============================================================
+// 底部下载条 + 导航失败角标（由 refreshGlobalTaskStatus 每 2 秒驱动）
+// ============================================================
+// 下载条只在有任务时出现：左边是正在下的歌和进度，右边是排队数和失败数
+function renderDlbar(tasks, pausedAll, failedCount) {
+    // 第 1 步：导航上的失败角标
+    const badge = document.getElementById("navFailBadge");
+    const badgeNum = document.getElementById("navFailNum");
+    if (badge && badgeNum) {
+        badgeNum.textContent = String(failedCount);
+        badge.classList.toggle("d-none", failedCount === 0);
     }
 
-    const current = document.getElementById("statusCurrent");
-    if (!current) return;
+    // 第 2 步：没有任务就收起下载条
+    const title = document.getElementById("dlbarTitle");
+    const side = document.getElementById("dlbarSide");
+    const prog = document.getElementById("dlbarProg");
+    if (!title || !side || !prog) return;
+    if (tasks.length === 0) {
+        document.body.classList.remove("has-dlbar");
+        return;
+    }
+
+    // 第 3 步：左边标题和进度
     const downloading = tasks.find(t => t.status === "downloading");
-    if (downloading) {
-        const pct = Math.max(0, Math.min(100, downloading.progress || 0));
-        const firstArtist = String(downloading.artists || "").split("/")[0].trim();
-        current.innerHTML =
-            '<span class="status-current-text">' + escapeHtml(downloading.song_name + " - " + firstArtist) + "</span>" +
-            '<span class="status-progress"><span class="status-progress-bar" style="width:' + pct + '%"></span></span>';
-        current.classList.remove("d-none");
+    const nPending = tasks.filter(t => t.status === "pending").length;
+    const nPaused = tasks.filter(t => t.status === "paused").length;
+    let titleText = "";
+    let pct = 0;
+    if (pausedAll) {
+        titleText = "已全部暂停";
+    } else if (downloading) {
+        pct = Math.max(0, Math.min(100, downloading.progress || 0));
+        titleText = "正在下载 " + downloading.song_name + " · " + pct + "%";
     } else if (nPending > 0) {
-        current.textContent = "待下载 " + nPending + " 首";
-        current.classList.remove("d-none");
+        titleText = "排队中 " + nPending + " 首";
     } else {
-        current.classList.add("d-none");
+        titleText = "已暂停 " + nPaused + " 首";
     }
-}
+    title.textContent = titleText;
+    prog.style.width = pct + "%";
 
-// 点击/回车状态栏 → 下载页（APP_BASE 拼法与 api()/accounts.js 导出跳转一致）
-const _appStatusbar = document.getElementById("appStatusbar");
-if (_appStatusbar) {
-    const _goHistory = () => {
-        window.location.href = (window.APP_BASE || "") + "/history";
-    };
-    _appStatusbar.addEventListener("click", _goHistory);
-    _appStatusbar.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            _goHistory();
-        }
-    });
-}
+    // 第 4 步：右边的排队数和失败数
+    side.textContent = "";
+    const segs = [];
+    if (downloading && nPending > 0) segs.push("还有 " + nPending + " 首排队");
+    if (!pausedAll && downloading && nPaused > 0) segs.push("暂停 " + nPaused + " 首");
+    side.appendChild(document.createTextNode(segs.join(" · ")));
+    if (failedCount > 0) {
+        if (segs.length) side.appendChild(document.createTextNode(" · "));
+        const fail = document.createElement("span");
+        fail.className = "app-dlbar-fail";
+        fail.textContent = failedCount + " 首失败";
+        side.appendChild(fail);
+    }
+    side.appendChild(document.createTextNode(" ›"));
 
-// ============================================================
-// 顶栏二级面包屑：各页切页内标签时调用
-// ============================================================
-// name 为空/null → 隐藏分隔符与子标题；否则写入文本并显示
-// app.js 先于各页脚本加载，页内可直接调用 AppUI.setSubTab(...)
-window.AppUI = {
-    setSubTab(name) {
-        const sep = document.querySelector(".crumb-sep");
-        const sub = document.getElementById("crumbSub");
-        if (!sep || !sub) return;
-        if (!name) {
-            sub.textContent = "";
-            sep.classList.add("d-none");
-            sub.classList.add("d-none");
-        } else {
-            sub.textContent = name;
-            sep.classList.remove("d-none");
-            sub.classList.remove("d-none");
-        }
-    },
-};
+    document.body.classList.add("has-dlbar");
+}
 
 // DOM 就绪后启动轮询（兼容已加载完和未加载完两种情况）
 function startGlobalStatusPolling() {
-    // 立即刷新一次，让底部状态栏尽快显示真实队列状态
+    // 立即刷新一次，让下载条尽快显示真实队列状态
     refreshGlobalTaskStatus();
-    // 每 2 秒刷新一次（与原 dashboard.js 间隔一致）；
-    // 页面在后台时不发无谓请求，切回前台下一轮自动恢复
+    // 每 2 秒刷新一次；页面在后台时不发无谓请求，切回前台下一轮自动恢复
     setInterval(() => {
         if (document.hidden) return;
         refreshGlobalTaskStatus();
@@ -264,10 +272,12 @@ if (document.readyState === "loading") {
 // 用法：页面 Alpine 表达式内 `$store.modals.<id> = true/false`，
 // 页面 JS 内 `Alpine.store('modals').<id> = true/false`。
 // 多个 modal 各占一个 store key，互不干扰。
+// queue 仓库：全局任务轮询的结果（tasks 在途任务、failed 失败记录数）。
 document.addEventListener("alpine:init", () => {
     if (window.Alpine && !Alpine.store("modals")) {
         Alpine.store("modals", {});
     }
+    Alpine.store("queue", { tasks: [], failed: 0 });
 });
 
 // ---- 确认框 ----
@@ -307,7 +317,7 @@ window.uiConfirm = function(opts = {}) {
         header.appendChild(closeBtn);
 
         const body = document.createElement("div");
-        body.className = "ui-modal-body";
+        body.className = "ui-modal-body ui-modal-text";
         body.textContent = message;
 
         const footer = document.createElement("div");

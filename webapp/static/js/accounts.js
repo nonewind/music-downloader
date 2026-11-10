@@ -1,9 +1,9 @@
-// 账号管理页（Frontend 2.0 重写，UI-03c）
+// 账号（设置页里的「账号」栏，嵌在 settingsPage 里面的独立组件）
 //
-// 布局：页头（导入 / 导出[仅 admin，模板条件渲染] / 添加账号）+ 平台过滤
-// 分段（全部/网易云/QQ/酷狗 + 计数徽章）。「全部」= 卡片只读视图（平台分组/
-// VIP/到期时间（过期红、酷狗未提供灰）/启停状态/月额度）；单平台 = 表格可
-// 编辑视图（上移/下移（首尾禁用）、启停开关、测试登录、编辑弹窗、删除）。
+// 布局：平台筛选（全部/网易云/QQ/酷狗 + 数量）+ 导入 / 导出 / 添加账号；
+// 下面一行一个账号：别名、平台、会员类型、昵称、到期时间（过期红、酷狗
+// 未提供灰）、本月已下，右边是启用开关、测试、编辑、删除。排序箭头只在
+// 选了单个平台时显示（后端在同平台内交换）。
 //
 // 依赖全局工具（app.js 先于本脚本加载）：api()、showToast()、uiConfirm()、
 // window.PLATFORM_META。渲染全部由 Alpine 模板绑定（x-for/x-text/:class），
@@ -58,7 +58,7 @@ function accountsPage() {
         accounts: [],
         loading: true,
 
-        // ---- 平台过滤分段（'all' = 卡片只读视图，单平台 = 表格可编辑视图） ----
+        // ---- 平台筛选（'all' = 全部账号；选了单个平台才显示排序箭头） ----
         platform: "all",
 
         // ---- 行内操作 ----
@@ -89,7 +89,6 @@ function accountsPage() {
             // 添加弹窗关闭钩子（旧 hidden.bs.modal 语义）：统一停全部扫码轮询
             this.$watch("$store.modals.addAcc", (open) => { if (!open) this.stopAllQrPolling(); });
             await this.loadAccounts();
-            this.syncSubTab();
         },
 
         // 组件销毁兜底清理（页面整页跳转无需，SPA 式复用时防 timer 泄漏）
@@ -133,24 +132,9 @@ function accountsPage() {
                 ? this.accounts
                 : this.accounts.filter(a => a.platform === this.platform);
         },
-        // 卡片视图按平台分组（固定 netease → qq → kugou，空平台不显示）
-        get platformGroups() {
-            return ["netease", "qq", "kugou"]
-                .map(p => ({ platform: p, items: this.accounts.filter(a => a.platform === p) }))
-                .filter(g => g.items.length > 0);
-        },
-
         switchPlatform(p) {
             if (this.platform === p) return;
             this.platform = p;
-            this.syncSubTab();
-        },
-
-        // 顶栏二级面包屑跟随分段（旧页 setSubTab 语义）
-        syncSubTab() {
-            if (window.AppUI && window.AppUI.setSubTab) {
-                window.AppUI.setSubTab(this.platform === "all" ? "全部" : this.platName(this.platform));
-            }
         },
 
         // ============================================================

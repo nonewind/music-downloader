@@ -52,7 +52,7 @@ const blankSvcState = () => ({ data: null, starting: false, stopping: false });
 
 // 设置页分类（UI-05 布局重写）：左侧导航的 section key 集合，
 // 同时用于校验地址栏 hash 与 goSection 入参
-const SETTING_SECTIONS = ["general", "download", "quality", "multiaccount", "sync", "api"];
+const SETTING_SECTIONS = ["accounts", "general", "download", "quality", "multiaccount", "sync", "api"];
 
 function settingsPage() {
     return {
@@ -63,7 +63,7 @@ function settingsPage() {
         tokenState: { enabled: false, fromEnv: false, input: "", busy: false },
         loading: true,
         saving: false,
-        section: "general",       // 当前分类（hash 记忆，刷新/直达不丢）
+        section: "accounts",      // 当前分类（hash 记忆，刷新/直达不丢）；账号栏是独立组件 accountsPage
         _savedSnapshot: "",       // 回填后的 payload 快照（isDirty 比较）
         // 目录结构迁移：needs=null 检测中/隐藏提示条；>0 显示提示条
         migrate: { needs: null, busy: false },

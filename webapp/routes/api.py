@@ -853,17 +853,22 @@ def retry_failed():
 def get_tasks():
     """获取当前活跃任务（pending + downloading + paused）
 
-    额外返回两个全局标志：
+    额外返回：
         paused_all: 是否处于「暂停全部」状态
         has_active: 是否存在未暂停的在途任务（驱动导航栏"下载中/空闲"指示器，
                     避免全部暂停时恒显"下载中"）
+        failed_count: 失败记录数（只计 kind=normal，口径与下载页失败重试栏
+                    的 /api/songs?status=failed&kind=normal 一致），供每个页面
+                    的导航角标和底部下载条显示
     """
     tm = _get_task_manager()
+    failed_count = DownloadTask.query.filter_by(status="failed", kind="normal").count()
     return jsonify({
         "code": 0,
         "data": tm.get_active_tasks(),
         "paused_all": tm.is_globally_paused(),
         "has_active": tm.has_active_task(),
+        "failed_count": failed_count,
     })
 
 

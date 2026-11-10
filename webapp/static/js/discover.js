@@ -1,19 +1,18 @@
-// 发现页（Frontend 2.0 重写，UI-03b 自旧 playlists 页拆出）：独立页面
+// 找歌页（首页）：搜索 + 我的歌单 + 官方排行榜 + 热门歌单
 //
-// 布局：搜索区置顶（默认焦点，空态提示）+ 下方「官方排行榜 / 热门歌单」
-// 两个 ui-card 组头可折叠分区（榜单默认展开、热门默认收起）；平台切换为
-// pill 风格 ui-btn 分段控件。
+// 布局：搜索框置顶（默认焦点）；搜索之后下面只显示结果（一行一首歌，
+// 右边直接是状态：下载 / 排队中 / 下载中 62% / 已下载 / 失败可重试）；
+// 没搜索时显示「我的歌单」（列表是独立组件 playlistsPage，见 playlists.js）、
+// 排行榜、热门歌单（默认收起）。
 //
 // 依赖全局工具（app.js 先于本脚本加载）：api()、showToast()、uiConfirm()、
 // get_quality_name()、get_current_quality_name()、fmtDate()、
-// window.CACHED_SETTINGS、模板注入的 window._AVAILABLE_PLATFORMS。
+// window.CACHED_SETTINGS、Alpine 的 queue 仓库（全局任务轮询结果）、
+// 模板注入的 window._AVAILABLE_PLATFORMS。
 // 渲染全部由 Alpine 模板绑定（x-for/x-text），本文件不拼任何 innerHTML。
 //
-// 平台状态记忆（旧 _platformState 的简化版）：按平台缓存一份筛选/页码/
-// 搜索词与已拉取数据，切平台时快照保存/恢复；懒加载语义保留——榜单/热门
-// 首次进入某平台（展开对应分区）才拉取，之后切回不再重复请求。
-// API 参数与旧页逐字节对齐：platform 必带、fee/force、limit/page/order/cat、
-// type、offset=(page-1)*limit。
+// 平台状态记忆：按平台缓存一份筛选/页码/搜索词与已拉取数据，切平台时
+// 快照保存/恢复；榜单/热门首次进入某平台才拉取，之后切回不再重复请求。
 
 function discoverPage() {
     return {
@@ -23,9 +22,8 @@ function discoverPage() {
             ? window._AVAILABLE_PLATFORMS[0].key : "netease",
         _platformState: {},   // 每平台快照（仅 JS 内部读写，模板不引用）
 
-        // ---- 折叠分区（页面级 UI 态，跨平台保持） ----
-        topOpen: true,        // 官方排行榜默认展开
-        hotOpen: false,       // 热门歌单默认收起（首次展开才拉取）
+        // ---- 热门歌单是否展开（默认收起，首次展开才拉取；跨平台保持） ----
+        hotOpen: false,
 
         // ---- 榜单（当前平台） ----
         toplists: [],
@@ -53,6 +51,7 @@ function discoverPage() {
         },
         searchLoading: false,
         allBusy: false,
+        syncing: false,       // 「立即同步」全部歌单进行中
 
         // 队列活跃→空闲跃迁（app.js renderStatusbar 广播）：仅查本地库刷新
         // 当前页行状态（不重调平台搜索），让已入队歌曲尽快落到终态
@@ -187,17 +186,13 @@ function discoverPage() {
 
         // 折叠分区懒加载：展开且该平台未拉过才请求
         ensureSections() {
-            if (this.topOpen && !this.toplistsLoaded && !this.topLoading) this.loadToplists();
+            if (!this.toplistsLoaded && !this.topLoading) this.loadToplists();
             if (this.hotOpen && !this.hotLoaded && !this.hotLoading) {
                 this.loadCategories();
                 this.loadHot(1);
             }
         },
 
-        toggleTop() {
-            this.topOpen = !this.topOpen;
-            if (this.topOpen) this.ensureSections();
-        },
         toggleHot() {
             this.hotOpen = !this.hotOpen;
             if (this.hotOpen) this.ensureSections();
@@ -267,7 +262,22 @@ function discoverPage() {
             return this.search.type === "album";
         },
 
-        // 切换搜索类型：重置页码并清空结果（与旧页一致）
+        // 点「歌曲 / 歌手 / 专辑」：换类型，输入框里有词就直接重新搜
+        setType(type) {
+            if (type === this.search.type) return;
+            this.search.type = type;
+            this.resetSearchOnType();
+            if ((this.search.keyword || "").trim()) this.doSearch();
+        },
+
+        // 点输入框里的 ×：清空搜索，回到「我的歌单 / 排行榜」
+        clearSearch() {
+            this.search.keyword = "";
+            this.resetSearchOnType();
+            this.$nextTick(() => { const el = this.$refs.kw; if (el) el.focus(); });
+        },
+
+        // 重置页码并清空结果
         resetSearchOnType() {
             this.search.page = 1;
             this.search.searched = false;
@@ -310,6 +320,51 @@ function discoverPage() {
             } finally {
                 this.searchLoading = false;
             }
+        },
+
+        // ============================================================
+        // 搜索结果行的状态（模板据此决定右边显示什么）
+        // ============================================================
+        // 这首歌在下载队列里的任务（没有则为 null）
+        rowTask(s) {
+            const sid = String(s.id);
+            const tasks = this.$store.queue.tasks;
+            for (const t of tasks) {
+                if (String(t.song_id) === sid && t.platform === this.platform) return t;
+            }
+            return null;
+        },
+
+        // busy 请求中 / downloading 下载中 / pending 排队中 / paused 已暂停 /
+        // failed 失败 / done 已下载 / none 还没下载
+        rowState(s) {
+            if (s.busy) return "busy";
+            const task = this.rowTask(s);
+            if (task) {
+                if (task.status === "downloading") return "downloading";
+                if (task.status === "paused") return "paused";
+                return "pending";
+            }
+            // 刚点完下载、轮询还没带回任务的那一两秒
+            if (s.downloading || s.queued) return "pending";
+            if (s.failed) return "failed";
+            if (s.downloaded) return "done";
+            return "none";
+        },
+
+        rowPct(s) {
+            const task = this.rowTask(s);
+            if (!task) return 0;
+            return Math.max(0, Math.min(100, task.progress || 0));
+        },
+
+        // 专辑行第二行：歌手 · N 首 · 发行日期
+        albumSub(a) {
+            const parts = [];
+            if (a.artist) parts.push(a.artist);
+            if (a.size) parts.push(a.size + " 首");
+            if (a.publish_time) parts.push(fmtDate(a.publish_time));
+            return parts.join(" · ");
         },
 
         // ============================================================
@@ -443,10 +498,25 @@ function discoverPage() {
                 const data = await this.addPlaylist(item.id, type, this.defaultLimit, this.platform);
                 showToast(data.msg, "添加成功");
                 this.myPlaylistIds = new Set([...this.myPlaylistIds, parseInt(item.id)]);
+                window.dispatchEvent(new CustomEvent("md:playlists-changed"));
             } catch (e) {
                 showToast(e.message, "添加失败");
             } finally {
                 item.busy = false;
+            }
+        },
+
+        // 立即同步全部已启用的歌单
+        async syncAll() {
+            if (this.syncing) return;
+            this.syncing = true;
+            try {
+                const data = await api("/api/sync-all", { method: "POST" });
+                showToast(data.msg, "同步结果", "success");
+            } catch (e) {
+                showToast(e.message, "错误", "error");
+            } finally {
+                this.syncing = false;
             }
         },
 
@@ -458,7 +528,7 @@ function discoverPage() {
         },
 
         // ============================================================
-        // 添加歌单弹窗（发现页/歌单页同款：ID/链接 + 平台 + 类型 + 默认前 N）
+        // 添加歌单弹窗（ID/链接 + 平台 + 类型 + 默认前 N）
         // ============================================================
         openAdd() {
             this.addForm = {
@@ -478,6 +548,7 @@ function discoverPage() {
                 showToast(data.msg, "添加成功");
                 this.$store.modals.addPl = false;
                 this.loadMyPlaylists();     // 新歌单可能就是发现卡片里的榜单
+                window.dispatchEvent(new CustomEvent("md:playlists-changed"));
             } catch (e) {
                 showToast(e.message, "添加失败");
             } finally {
@@ -523,9 +594,5 @@ function discoverPage() {
             this.loadSearch();
         },
 
-        // ---- 展示辅助 ----
-        fmtPub(t) {
-            return fmtDate(t);
-        },
     };
 }

@@ -1,4 +1,4 @@
-// 下载页（Frontend 2.0 重写）：单页双段——上段活跃任务区 + 下段历史表格区
+// 下载页：上段正在进行的任务 + 下段下载记录（一行一条）
 //
 // 依赖全局工具（app.js 先于本脚本加载）：api()（统一 APP_BASE/401/业务码，
 // 默认 15s timeout，本页全部走默认）、showToast()、uiConfirm()（Promise 确认框，
@@ -241,9 +241,28 @@ function historyPage() {
             }
         },
 
-        // 查询（关键词回车 / 查询按钮共用；下拉与旧版一致不自动提交）
+        // 查询（关键词回车触发）
         search() {
             this.loadSongs(1);
+        },
+
+        // 点状态筛选片：立即生效
+        setStatus(status) {
+            if (status === this.statusFilter) return;
+            this.statusFilter = status;
+            this.loadSongs(1);
+        },
+
+        // 记录行第三行小字：平台 · 音质 · 大小 · 下载时间 · 来源歌单
+        songMeta(s) {
+            const parts = [];
+            parts.push(this.platName(s));
+            const quality = get_quality_name(s.quality);
+            if (quality) parts.push(quality);
+            if (s.file_size) parts.push(fmtSizeBytes(s.file_size));
+            if (s.downloaded_at) parts.push(this.fmtSongTime(s.downloaded_at));
+            if (s.playlist_name) parts.push(s.playlist_name);
+            return parts.join(" · ");
         },
 
         // ---- 选择：全选与单选联动（半选态由模板 x-effect 驱动） ----
@@ -300,9 +319,6 @@ function historyPage() {
         platName(s) {
             const meta = window.PLATFORM_META[s.platform];
             return (meta && meta.name) || s.platform_name || s.platform;
-        },
-        platBadgeCls(platform) {
-            return window.PLATFORM_META[platform] ? "ui-badge-plat-" + platform : "ui-badge-muted";
         },
         // 服务端 downloaded_at 已是 "YYYY-MM-DD HH:MM:SS" 显示格式：直接展示
         //（绕开部分内核不解析空格日期的问题）；其余形状交给 fmtDateTime

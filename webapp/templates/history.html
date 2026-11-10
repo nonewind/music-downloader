@@ -1,267 +1,217 @@
 {% extends "base.html" %}
-{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{# base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
 {% import "macros/ui.html" as ui %}
 {% block title %}下载 - Deen音乐下载器{% endblock %}
 {% block content %}
 <style>
-    /* 下载页局部样式（hist- 前缀，页面自治；ui- 组件层不改动） */
-    .hist-pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-    .hist-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
-    .hist-globalops { display: flex; gap: 8px; flex-shrink: 0; }
-    .hist-tasks { margin-bottom: 14px; overflow: hidden; }
-    .hist-tasks-head { display: flex; align-items: center; gap: 8px; padding: 10px var(--ui-sp-5); border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
-    .hist-tasks-head .ui-badge { margin-left: auto; }
-    .hist-task { padding: 8px var(--ui-sp-5); border-bottom: 1px solid var(--ui-border); }
-    .hist-task:last-child { border-bottom: 0; }
+    /* 下载页局部样式（hist- 前缀；通用积木 list-/chip/sec- 在 app.css） */
     .hist-task-busy { opacity: .6; }
-    .hist-task-line { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(110px, 200px) 44px auto; align-items: center; gap: 10px; }
-    .hist-task-name { font-size: 13px; color: var(--ui-text); }
-    .hist-prog { position: relative; height: 8px; background: var(--ui-bg); border-radius: 999px; overflow: hidden; }
-    .hist-prog-bar { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--ui-primary); border-radius: 999px; transition: width .3s ease; }
-    .hist-task-pct { font-size: 12px; color: var(--ui-text-2); text-align: right; }
-    .hist-task-error { margin-top: 4px; font-size: 12px; color: var(--ui-danger); }
-    .hist-filter { margin-bottom: 12px; }
-    .hist-filterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-    .hist-filterrow label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-2); white-space: nowrap; }
-    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px var(--ui-sp-5); margin-bottom: 12px; border: 1px solid rgba(245, 158, 11, .55); }
-    .hist-retrybar > span:first-child { font-size: 13px; color: var(--ui-text); }
-    .hist-batchbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; font-size: 13px; color: var(--ui-text-2); }
-    .hist-tablewrap { overflow-x: auto; }
-    .hist-songname { display: block; max-width: 260px; }
-    .hist-album { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ui-text-3); }
-    .hist-filestate { display: inline-block; margin-top: 2px; font-size: 11px; }  /* 文件状态徽章：低于常规徽章一档，降噪音 */
-    .hist-failbtn { font: inherit; border: 0; padding: 2px 10px; cursor: pointer; }
-    .hist-meta { margin: 0 0 8px; font-size: 13px; }
-    .hist-delwarn { margin: 0; padding: 10px 12px; font-size: 13px; color: #b45309; background: rgba(245, 158, 11, .12); border-radius: var(--ui-r-s); }
-    .hist-kind { margin-left: 6px; font-size: 11px; vertical-align: 1px; }
+    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 20px; margin-top: 16px; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 15px; font-weight: 600; }
+    .hist-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .hist-filter .ui-input { flex: 1 1 200px; min-width: 0; max-width: 320px; }
+    .hist-batchbar { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-bottom: 4px; padding-left: 12px; font-size: 14px; color: var(--ui-text-2); }
+    .hist-batchbar .ui-btn { margin-left: auto; }
+    .hist-row { padding-left: 12px; }
+    .hist-metaline { font-size: 13px; color: var(--ui-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-filestate { font-size: 12px; line-height: 18px; padding: 0 8px; }
+    .hist-failbtn { font: inherit; font-size: 13px; font-weight: 500; border: 0; cursor: pointer; }
+    .hist-meta { margin: 0 0 8px; font-size: 15px; }
+    .hist-delwarn { margin: 0; padding: 10px 12px; font-size: 14px; color: #7a5200; background: #f3e9d2; border-radius: var(--ui-r-s); }
     .hist-upmodal { width: 860px; }
-    .hist-upbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
-    .hist-upbar label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ui-text-2); }
-    .hist-uprecent { margin-left: auto; font-size: 12px; color: var(--ui-text-3); }
-    .hist-uplist { max-height: 46vh; overflow-y: auto; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
-    .hist-uplist .ui-table th { position: sticky; top: 0; background: var(--ui-surface); z-index: 1; }
-    .hist-uphint { margin: 10px 0 0; font-size: 12px; color: var(--ui-text-3); }
-    .hist-upfoot { flex: 1; align-self: center; font-size: 12px; color: var(--ui-text-2); }
+    .hist-upbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 14px; }
+    .hist-upbar label { display: flex; align-items: center; gap: 6px; color: var(--ui-text-2); }
+    .hist-uprecent { margin-left: auto; font-size: 13px; color: var(--ui-text-2); }
+    .hist-upbatch { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 14px; color: var(--ui-text-2); }
+    .hist-uplist { max-height: 46vh; overflow: auto; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
+    .hist-uplist .ui-table th { position: sticky; top: 0; z-index: 1; }
+    .hist-uplist .ui-table td { white-space: nowrap; }
+    .hist-songname { display: block; max-width: 260px; }
+    .hist-uphint { margin: 10px 0 0; font-size: 13px; color: var(--ui-text-2); }
+    .hist-upfoot { flex: 1; align-self: center; font-size: 13px; color: var(--ui-text-2); }
     .hist-upfoot.is-over { color: var(--ui-danger); }
-    .hist-failreason { margin: 0; padding: 10px 12px; color: var(--ui-text); background: rgba(239, 68, 68, .08); border: 1px solid rgba(239, 68, 68, .25); border-radius: var(--ui-r-s); white-space: pre-wrap; word-break: break-all; }
+    .hist-failreason { margin: 0; padding: 10px 12px; color: var(--ui-text); background: var(--ui-danger-soft); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-s); white-space: pre-wrap; word-break: break-all; }
     @media (max-width: 767.98px) {
-        .hist-task-line { grid-template-columns: minmax(0, 1fr) auto auto; }
-        .hist-prog, .hist-task-pct { display: none; }
+        .hist-row, .hist-taskrow { flex-wrap: wrap; }
+        .hist-row .list-main { flex-basis: calc(100% - 50px); }
+        .hist-row .list-side { flex: 1; justify-content: space-between; padding-left: 50px; }
+        .hist-taskrow .list-main { flex-basis: 100%; }
+        .hist-taskrow .list-side { flex: 1; justify-content: space-between; }
     }
 </style>
 
 <div x-data="historyPage()" x-cloak>
-    <!-- 1. 页头：标题 + 全局操作（有任何任务时显示） -->
-    <div class="hist-pagehead">
-        <h4><i class="bi bi-download"></i> 下载</h4>
-        <div class="hist-globalops">
-            {{ ui.btn('音质升级', 'secondary', icon='graph-up-arrow', attrs={'@click': 'openUpgrade()'}) }}
-            {{ ui.btn('暂停全部', 'secondary', icon='pause-fill',
+    <!-- 1. 页头：标题 + 全局操作 -->
+    <div class="page-head">
+        <h1 class="page-title">下载</h1>
+        <div class="page-actions">
+            {{ ui.btn('暂停全部', 'secondary', size='sm', icon='pause-fill',
                       attrs={'x-show': 'tasks.length', ':disabled': '!canPauseAll || allOpsBusy', '@click': 'pauseAll()'}) }}
-            {{ ui.btn('继续全部', 'secondary', icon='play-fill',
+            {{ ui.btn('继续全部', 'secondary', size='sm', icon='play-fill',
                       attrs={'x-show': 'tasks.length', ':disabled': '!canResumeAll || allOpsBusy', '@click': 'resumeAll()'}) }}
+            {{ ui.btn('音质升级', 'secondary', size='sm', icon='graph-up-arrow', attrs={'@click': 'openUpgrade()'}) }}
         </div>
     </div>
 
-    <!-- 2. 活跃任务区（高密度行；无任务时整块不显示） -->
-    <div class="ui-card hist-tasks" x-show="tasks.length">
-        <div class="hist-tasks-head">
-            <i class="bi bi-activity"></i> 下载任务
-            <span class="ui-badge ui-badge-info" x-text="tasks.length"></span>
+    <!-- 2. 正在进行的任务（没有任务时整块不显示） -->
+    <div x-show="tasks.length">
+        <div class="sec-head" style="margin-top: 0">
+            <h2 class="sec-title">正在进行 <span class="ui-text-2 ui-mono" x-text="tasks.length"></span></h2>
         </div>
-        <template x-for="t in tasks" :key="t.pk">
-            <div class="hist-task" :class="{ 'hist-task-busy': taskLocked(t.pk) }">
-                <div class="hist-task-line">
-                    <span class="hist-task-name ui-truncate"
-                          x-text="(t.artists ? t.artists + ' - ' : '') + t.song_name"
-                          :title="(t.artists ? t.artists + ' - ' : '') + t.song_name"></span>
-                    <span class="ui-row-actions">
-                        <span class="ui-badge ui-badge-info" x-show="t.kind === 'upgrade'">升级</span>
-                        <span class="ui-badge" :class="statusMeta(t.status).cls" x-text="statusMeta(t.status).text"></span>
-                    </span>
-                    <span class="hist-prog">
-                        <span class="hist-prog-bar" :style="'width:' + Math.min(100, Math.max(0, t.progress || 0)) + '%'"></span>
-                    </span>
-                    <span class="hist-task-pct ui-mono" x-text="(t.progress || 0) + '%'"></span>
-                    <span class="ui-row-actions">
-                        {# 暂停/继续按钮随服务端状态校正（每轮轮询按 t.status 切换显隐） #}
-                        <button type="button" class="ui-btn ui-btn-sm ui-btn-ghost" x-show="t.status !== 'paused'"
-                                :class="{ 'is-loading': taskOpBusy(t.pk, 'pause') }"
-                                :disabled="taskLocked(t.pk)" @click="taskAction(t, 'pause')" title="暂停任务">
-                            <i class="bi bi-pause-fill"></i> 暂停
-                        </button>
-                        <button type="button" class="ui-btn ui-btn-sm ui-btn-ghost" x-show="t.status === 'paused'"
-                                :class="{ 'is-loading': taskOpBusy(t.pk, 'resume') }"
-                                :disabled="taskLocked(t.pk)" @click="taskAction(t, 'resume')" title="继续任务（断点续传）">
-                            <i class="bi bi-play-fill"></i> 继续
-                        </button>
-                        <button type="button" class="ui-btn ui-btn-sm ui-btn-danger"
-                                :class="{ 'is-loading': taskOpBusy(t.pk, 'delete') }"
-                                :disabled="taskLocked(t.pk)" @click="taskAction(t, 'delete')"
-                                title="删除任务" aria-label="删除任务">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </span>
+        <div class="list-card">
+            <template x-for="t in tasks" :key="t.pk">
+                <div class="list-row hist-taskrow"
+                     :class="{ 'hist-task-busy': taskLocked(t.pk), 'is-active': t.status === 'downloading' }">
+                    <div class="list-main">
+                        <div class="list-title">
+                            <span class="ui-truncate" x-text="t.song_name" :title="t.song_name"></span>
+                            <span class="ui-badge ui-badge-info" x-show="t.kind === 'upgrade'">升级</span>
+                        </div>
+                        <div class="list-sub" x-show="t.status !== 'downloading' && !t.error_msg" x-text="t.artists"></div>
+                        {# 错误信息行：truncate + title 全文 #}
+                        <div class="list-sub is-fail" x-show="t.error_msg" x-text="t.error_msg" :title="t.error_msg"></div>
+                        <div class="list-prog" x-show="t.status === 'downloading'">
+                            <span :style="'width:' + Math.min(100, Math.max(0, t.progress || 0)) + '%'"></span>
+                        </div>
+                    </div>
+                    <div class="list-side">
+                        <span class="list-state" :class="{ 'is-on': t.status === 'downloading' }"
+                              x-text="t.status === 'downloading' ? ('下载中 ' + (t.progress || 0) + '%') : statusMeta(t.status).text"></span>
+                        <span class="ui-row-actions">
+                            {# 暂停/继续按钮随服务端状态校正（每轮轮询按 t.status 切换显隐） #}
+                            <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="t.status !== 'paused'"
+                                    :class="{ 'is-loading': taskOpBusy(t.pk, 'pause') }"
+                                    :disabled="taskLocked(t.pk)" @click="taskAction(t, 'pause')"
+                                    title="暂停" aria-label="暂停任务">
+                                <i class="bi bi-pause-fill"></i>
+                            </button>
+                            <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="t.status === 'paused'"
+                                    :class="{ 'is-loading': taskOpBusy(t.pk, 'resume') }"
+                                    :disabled="taskLocked(t.pk)" @click="taskAction(t, 'resume')"
+                                    title="继续（断点续传）" aria-label="继续任务">
+                                <i class="bi bi-play-fill"></i>
+                            </button>
+                            <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                    :class="{ 'is-loading': taskOpBusy(t.pk, 'delete') }"
+                                    :disabled="taskLocked(t.pk)" @click="taskAction(t, 'delete')"
+                                    title="删除任务" aria-label="删除任务">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </span>
+                    </div>
                 </div>
-                {# 错误信息行：truncate + title 全文 #}
-                <div class="hist-task-error ui-truncate" x-show="t.error_msg" x-text="t.error_msg" :title="t.error_msg"></div>
-            </div>
-        </template>
-    </div>
-
-    <!-- 3. 历史区 -->
-    {# 3.1 筛选条：状态/关键词（回车触发）/每页 + 查询（与旧版一致：下拉不自动提交） #}
-    <div class="ui-card hist-filter">
-        <div class="ui-card-body hist-filterrow">
-            <label>状态
-                <select class="ui-select" x-model="statusFilter">
-                    <option value="">全部</option>
-                    <option value="success">成功</option>
-                    <option value="failed">失败</option>
-                    <option value="skipped">已下载</option>
-                </select>
-            </label>
-            <label>搜索
-                <input type="text" class="ui-input" x-model="keyword" placeholder="歌名或歌手"
-                       @keydown.enter="search()">
-            </label>
-            <label>每页
-                <select class="ui-select" x-model="perPage">
-                    <option value="20">20</option>
-                    <option value="50">50</option>
-                    <option value="100">100</option>
-                </select>
-            </label>
-            {{ ui.btn('查询', 'primary', icon='search', attrs={'@click': 'search()'}) }}
+            </template>
         </div>
     </div>
 
-    {# 3.2 失败重试栏：库内存在失败记录即显示（不依赖当前筛选） #}
-    <div class="ui-card hist-retrybar" x-show="failedCount > 0">
-        <span><i class="bi bi-exclamation-triangle"></i> 当前存在 <b class="ui-mono" x-text="failedCount"></b> 条失败记录</span>
+    <!-- 3. 失败提示条：库内存在失败记录即显示（不依赖当前筛选） -->
+    <div class="hist-retrybar" x-show="failedCount > 0">
+        <span><i class="bi bi-exclamation-triangle"></i> 有 <span class="ui-mono" x-text="failedCount"></span> 首下载失败</span>
         <span class="ui-row-actions">
-            {{ ui.btn('全部重试', 'secondary', size='sm', icon='arrow-clockwise',
+            {{ ui.btn('全部重试', 'danger', size='sm', icon='arrow-clockwise',
                       attrs={':disabled': 'retryAllBusy', '@click': 'retryAll()'}) }}
-            {{ ui.btn('清除失败记录', 'danger', size='sm', icon='trash',
+            {{ ui.btn('清除失败记录', 'ghost', size='sm',
                       attrs={':disabled': 'clearFailedBusy', '@click': 'clearFailed()'}) }}
         </span>
     </div>
 
-    {# 3.3 历史表格 #}
-    <div class="ui-card" x-show="loadingSongs || total > 0">
-        <div class="ui-card-body">
-            <div class="hist-batchbar">
-                <span>已选 <b class="ui-mono" x-text="checkedCount"></b> 条</span>
-                {{ ui.btn('批量删除', 'danger', size='sm', icon='trash',
-                          attrs={':disabled': 'checkedCount === 0', '@click': 'batchDeleteClick()'}) }}
-            </div>
-            <div class="hist-tablewrap">
-                <table class="ui-table">
-                    <thead>
-                        <tr>
-                            <th style="width:40px">
-                                <span class="ui-check">
-                                    <input type="checkbox" title="全选本页" aria-label="全选本页"
-                                           :checked="allChecked" @change="toggleAll($event.target.checked)"
-                                           x-effect="$el.indeterminate = checkedCount > 0 && !allChecked">
-                                </span>
-                            </th>
-                            <th style="width:80px">平台</th>
-                            <th>歌曲</th>
-                            <th>歌手</th>
-                            <th>来源歌单</th>
-                            <th style="width:96px">音质</th>
-                            <th style="width:90px">大小</th>
-                            <th style="width:150px">下载时间</th>
-                            <th style="width:84px">状态</th>
-                            <th style="width:120px">操作</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr class="ui-table-empty" x-show="loadingSongs && !songs.length">
-                            <td colspan="10">加载中…</td>
-                        </tr>
-                        <template x-for="s in songs" :key="s.pk">
-                            <tr>
-                                <td>
-                                    <span class="ui-check">
-                                        <input type="checkbox" :checked="checked.has(s.pk)"
-                                               @change="toggleCheck(s, $event.target.checked)"
-                                               :aria-label="'选择：' + s.name">
-                                    </span>
-                                </td>
-                                <td>
-                                    <span class="ui-badge" :class="platBadgeCls(s.platform)" x-text="platName(s)"></span>
-                                </td>
-                                <td>
-                                    <span class="hist-songname ui-truncate" x-text="s.name"
-                                          :title="s.file_path || s.name"></span>
-                                    <span class="ui-badge ui-badge-info hist-kind" x-show="s.kind === 'upgrade'">升级</span>
-                                    <span class="hist-album" x-show="s.album" x-text="s.album" :title="s.album"></span>
-                                    {# 文件状态徽章（ORG-04）：索引派生的磁盘状态摘要，
-                                       file_state 为 null/未知值时不渲染（低视觉噪音） #}
-                                    <span class="ui-badge hist-filestate" x-show="fileStateMeta(s)"
-                                          :class="fileStateMeta(s) ? fileStateMeta(s).cls : ''"
-                                          x-text="fileStateMeta(s) ? fileStateMeta(s).text : ''"></span>
-                                </td>
-                                <td x-text="s.artists"></td>
-                                <td><span class="ui-text-3" style="font-size:12px" x-text="s.playlist_name || '--'"></span></td>
-                                <td x-text="get_quality_name(s.quality) || '--'"></td>
-                                <td class="ui-mono" x-text="fmtSizeBytes(s.file_size || null)"></td>
-                                <td><span class="ui-text-3" style="font-size:12px" x-text="fmtSongTime(s.downloaded_at)"></span></td>
-                                <td>
-                                    {# 失败徽章可点击 → 失败原因弹窗 #}
-                                    <button type="button" class="ui-badge ui-badge-danger hist-failbtn"
-                                            x-show="s.status === 'failed'" @click="showFail(s)"
-                                            title="点击查看失败原因">失败</button>
-                                    <span class="ui-badge" x-show="s.status !== 'failed'"
-                                          :class="statusMeta(s.status, s.kind).cls" x-text="statusMeta(s.status, s.kind).text"
-                                          :title="s.status === 'skipped' ? (s.error_msg || '') : ''"></span>
-                                </td>
-                                <td>
-                                    <span class="ui-row-actions">
-                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
-                                                x-show="s.status === 'failed' && s.kind !== 'upgrade'" @click="retrySong(s)" title="重试">
-                                            <i class="bi bi-arrow-clockwise"></i> 重试
-                                        </button>
-                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-secondary"
-                                                x-show="s.status === 'success'"
-                                                :disabled="redownloadBusy === s.pk"
-                                                :class="{ 'is-loading': redownloadBusy === s.pk }"
-                                                @click="redownload(s)" title="重新下载" aria-label="重新下载">
-                                            <i class="bi bi-arrow-repeat"></i>
-                                        </button>
-                                        <button type="button" class="ui-btn ui-btn-sm ui-btn-danger"
-                                                @click="deleteSongClick(s)" title="删除记录" aria-label="删除记录">
-                                            <i class="bi bi-trash"></i>
-                                        </button>
-                                    </span>
-                                </td>
-                            </tr>
-                        </template>
-                    </tbody>
-                </table>
-            </div>
+    <!-- 4. 下载记录 -->
+    <div class="sec-head">
+        <h2 class="sec-title">下载记录</h2>
+    </div>
 
-            {# 3.4 分页：ui-pagination 组件类。ui.pagination 宏是服务端静态渲染，
-               动态页码在页面侧按宏同型窗口逻辑（首页+前后省略号+当前±2+末页）渲染 #}
-            <ul class="ui-pagination" x-show="pages > 1">
-                <template x-for="(it, idx) in pagerItems" :key="idx">
-                    <li :class="{ active: it.type === 'num' && it.p === page,
-                                  disabled: it.type === 'gap' || (it.type === 'prev' && page <= 1) || (it.type === 'next' && page >= pages) }">
-                        <a class="ui-page-btn" href="#" x-text="it.label" @click.prevent="gotoPage(it)"></a>
-                    </li>
-                </template>
-            </ul>
+    {# 4.1 筛选：状态点一下就生效；关键词回车生效 #}
+    <div class="hist-filter">
+        <div class="chips">
+            <button type="button" class="chip" :class="{ active: statusFilter === '' }" @click="setStatus('')">全部</button>
+            <button type="button" class="chip" :class="{ active: statusFilter === 'success' }" @click="setStatus('success')">成功</button>
+            <button type="button" class="chip" :class="{ active: statusFilter === 'failed' }" @click="setStatus('failed')">失败</button>
+            <button type="button" class="chip" :class="{ active: statusFilter === 'skipped' }" @click="setStatus('skipped')">已下载</button>
         </div>
+        <input type="search" enterkeyhint="search" class="ui-input" x-model="keyword"
+               placeholder="搜歌名或歌手，回车" aria-label="搜索下载记录" @keydown.enter="search()">
     </div>
 
-    {# 3.5 空态（历史无数据） #}
+    {# 4.2 批量操作条 #}
+    <div class="hist-batchbar" x-show="songs.length">
+        <label class="ui-check">
+            <input type="checkbox" title="全选本页" aria-label="全选本页"
+                   :checked="allChecked" @change="toggleAll($event.target.checked)"
+                   x-effect="$el.indeterminate = checkedCount > 0 && !allChecked">
+        </label>
+        <span x-text="checkedCount ? ('已选 ' + checkedCount + ' 条') : ('共 ' + total + ' 条')"></span>
+        {{ ui.btn('删除所选', 'danger', size='sm', icon='trash',
+                  attrs={'x-show': 'checkedCount > 0', '@click': 'batchDeleteClick()'}) }}
+    </div>
+
+    {# 4.3 记录列表：一行一条 #}
+    <div class="list-card" x-show="songs.length">
+        <template x-for="s in songs" :key="s.pk">
+            <div class="list-row hist-row">
+                <label class="ui-check">
+                    <input type="checkbox" :checked="checked.has(s.pk)"
+                           @change="toggleCheck(s, $event.target.checked)"
+                           :aria-label="'选择：' + s.name">
+                </label>
+                <div class="list-main">
+                    <div class="list-title">
+                        <span class="ui-truncate" x-text="s.name" :title="s.file_path || s.name"></span>
+                        <span class="ui-badge ui-badge-info" x-show="s.kind === 'upgrade'">升级</span>
+                        {# 文件状态徽章（ORG-04）：索引派生的磁盘状态摘要，
+                           file_state 为 null/未知值时不渲染 #}
+                        <span class="ui-badge hist-filestate hide-sm" x-show="fileStateMeta(s)"
+                              :class="fileStateMeta(s) ? fileStateMeta(s).cls : ''"
+                              x-text="fileStateMeta(s) ? fileStateMeta(s).text : ''"></span>
+                    </div>
+                    <div class="list-sub" x-text="s.artists + (s.album ? ' · ' + s.album : '')"></div>
+                    <div class="hist-metaline" x-text="songMeta(s)" :title="songMeta(s)"></div>
+                </div>
+                <div class="list-side">
+                    {# 失败徽章可点击 → 失败原因弹窗 #}
+                    <button type="button" class="ui-badge ui-badge-danger hist-failbtn"
+                            x-show="s.status === 'failed'" @click="showFail(s)"
+                            title="点击查看失败原因">失败 · 看原因</button>
+                    <span class="ui-badge" x-show="s.status !== 'failed'"
+                          :class="statusMeta(s.status, s.kind).cls" x-text="statusMeta(s.status, s.kind).text"
+                          :title="s.status === 'skipped' ? (s.error_msg || '') : ''"></span>
+                    <span class="ui-row-actions">
+                        <button type="button" class="ui-btn ui-btn-danger ui-btn-sm"
+                                x-show="s.status === 'failed' && s.kind !== 'upgrade'" @click="retrySong(s)">
+                            重试
+                        </button>
+                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                x-show="s.status === 'success'"
+                                :disabled="redownloadBusy === s.pk"
+                                :class="{ 'is-loading': redownloadBusy === s.pk }"
+                                @click="redownload(s)" title="重新下载" aria-label="重新下载">
+                            <i class="bi bi-arrow-repeat"></i>
+                        </button>
+                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                @click="deleteSongClick(s)" title="删除记录" aria-label="删除记录">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </span>
+                </div>
+            </div>
+        </template>
+    </div>
+
+    {# 4.4 分页（首页 + 前后省略号 + 当前±2 + 末页） #}
+    <ul class="ui-pagination" x-show="pages > 1">
+        <template x-for="(it, idx) in pagerItems" :key="idx">
+            <li :class="{ active: it.type === 'num' && it.p === page,
+                          disabled: it.type === 'gap' || (it.type === 'prev' && page <= 1) || (it.type === 'next' && page >= pages) }">
+                <a class="ui-page-btn" href="#" x-text="it.label" @click.prevent="gotoPage(it)"></a>
+            </li>
+        </template>
+    </ul>
+
+    {# 4.5 加载中 / 空态 #}
+    <div class="ui-text-2" style="padding: 20px 0" x-show="loadingSongs && !songs.length">加载中…</div>
     <div x-show="!loadingSongs && total === 0">
-        {{ ui.empty('inbox', '暂无下载记录') }}
+        {{ ui.empty('inbox', '这里还没有下载记录') }}
     </div>
 
-    {# 4. 删除三选 Modal（单删/批删共用，$store.modals.delSong；标题随单/批量，
+    {# 5. 删除三选 Modal（单删/批删共用，$store.modals.delSong；标题随单/批量，
        宏的 title 为静态文本，故按宏同款结构手写以承载 x-text 标题） #}
     <div class="ui-modal-mask" id="delSong-mask" x-cloak x-show="$store.modals.delSong"
          @keydown.escape.window="$store.modals.delSong = false"
@@ -293,7 +243,7 @@
         </div>
     </div>
 
-    {# 5. 音质升级弹窗（UPG-04）：宽版，按 delSong 同款结构手写（宏宽度固定 480px） #}
+    {# 6. 音质升级弹窗（UPG-04）：宽版，按 delSong 同款结构手写（宏宽度固定 480px） #}
     <div class="ui-modal-mask" id="upgrade-mask" x-cloak x-show="$store.modals.upgrade"
          @keydown.escape.window="$store.modals.upgrade = false"
          @click.self="$store.modals.upgrade = false" style="display: none">
@@ -328,7 +278,7 @@
                 </div>
 
                 <div x-show="upItems.length">
-                    <div class="hist-batchbar">
+                    <div class="hist-upbatch">
                         <span>共 <b class="ui-mono" x-text="upTotal"></b> 首可升级，已选 <b class="ui-mono" x-text="upCheckedCount"></b> 首</span>
                         {{ ui.btn('选前 100 首', 'secondary', size='sm', attrs={'@click': 'upSelectFirst()'}) }}
                     </div>
@@ -363,8 +313,8 @@
                                         <td><span class="hist-songname ui-truncate" x-text="it.name" :title="it.file_path"></span></td>
                                         <td x-text="it.artists"></td>
                                         <td x-text="get_quality_name(it.quality)"></td>
-                                        <td class="ui-mono" style="font-size:12px" x-text="fmtSpec(it.spec)"></td>
-                                        <td><span class="ui-text-3" style="font-size:12px" x-text="fmtSongTime(it.downloaded_at)"></span></td>
+                                        <td class="ui-mono" x-text="fmtSpec(it.spec)"></td>
+                                        <td><span class="ui-text-3" x-text="fmtSongTime(it.downloaded_at)"></span></td>
                                     </tr>
                                 </template>
                             </tbody>

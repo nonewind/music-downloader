@@ -1,61 +1,59 @@
 {% extends "base.html" %}
-{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{# base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
 {% import "macros/ui.html" as ui %}
-{% block title %}音乐整理 - Deen音乐下载器{% endblock %}
+{% block title %}整理 - Deen音乐下载器{% endblock %}
 {% block content %}
 <style>
     /* 音乐整理页局部样式（org- 前缀，页面自治；ui- 组件层不做改动） */
-    .org-pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
-    .org-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; font-size: 18px; font-weight: 600; color: var(--ui-text); }
-    .org-desc { margin: 0; font-size: 13px; color: var(--ui-text-2); }
+    .org-stats { margin-bottom: 14px; }
     .org-stats-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 32px; }
     .org-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    .org-stat-label { font-size: 12px; color: var(--ui-text-3); white-space: nowrap; }
-    .org-stat-value { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .org-stat-label { font-size: 13px; color: var(--ui-text-3); white-space: nowrap; }
+    .org-stat-value { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; color: var(--ui-text); }
     .org-scanbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 14px; }
-    .org-summary { font-size: 13px; color: var(--ui-text-2); }
+    .org-summary { font-size: 15px; color: var(--ui-text-2); }
     .org-summary b { color: var(--ui-text); font-weight: 600; }
     .org-jobbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px var(--ui-sp-5); margin-bottom: 14px; }
-    .org-job-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; font-size: 13px; color: var(--ui-text); }
+    .org-job-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; font-size: 15px; color: var(--ui-text); }
     .org-job-prog { position: relative; flex: 1 1 160px; min-width: 120px; max-width: 320px; height: 8px; background: var(--ui-bg); border-radius: 999px; overflow: hidden; }
     .org-job-prog-bar { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--ui-primary); border-radius: 999px; transition: width .3s ease; }
-    .org-sub { font-size: 12px; color: var(--ui-text-3); font-weight: 400; }
+    .org-sub { font-size: 13px; color: var(--ui-text-3); font-weight: 400; }
     .org-actionbar { position: sticky; top: calc(var(--topbar-h) + 8px); z-index: 900; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; margin-bottom: 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
-    .org-sel-text { flex: 1 1 auto; min-width: 180px; font-size: 13px; color: var(--ui-text-2); }
+    .org-sel-text { flex: 1 1 auto; min-width: 180px; font-size: 15px; color: var(--ui-text-2); }
     .org-sel-text b { color: var(--ui-text); font-weight: 600; }
     .org-group { margin-bottom: 12px; overflow: hidden; }
     .org-group-head { display: flex; align-items: center; gap: 10px; padding: 8px 14px 8px 8px; cursor: pointer; user-select: none; }
     .org-group-head:hover { background: var(--ui-bg); }
-    .org-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--ui-text); }
-    .org-count { font-size: 12px; color: var(--ui-text-3); white-space: nowrap; }
-    .org-arrow { flex-shrink: 0; font-size: 12px; color: var(--ui-text-3); transition: transform .15s ease; }
+    .org-group-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; color: var(--ui-text); }
+    .org-count { font-size: 13px; color: var(--ui-text-3); white-space: nowrap; }
+    .org-arrow { flex-shrink: 0; font-size: 13px; color: var(--ui-text-3); transition: transform .15s ease; }
     .org-arrow-open { transform: rotate(180deg); }
     .org-group-body { border-top: 1px solid var(--ui-border); }
-    .org-row { display: grid; grid-template-columns: 28px auto minmax(0, 1fr) 150px 78px 52px 92px; align-items: center; gap: 10px; min-height: 32px; padding: 2px 14px 2px 10px; font-size: 13px; color: var(--ui-text); cursor: pointer; transition: background-color .12s; }
-    .org-row:hover { background: #f0f4fa; }
-    .org-row-selected { box-shadow: inset 3px 0 0 var(--ui-primary); background: rgba(59, 130, 246, .05); }
-    .org-row-selected:hover { background: rgba(59, 130, 246, .08); }
+    .org-row { display: grid; grid-template-columns: 36px auto minmax(0, 1fr) 160px 84px 60px 100px; align-items: center; gap: 10px; min-height: 44px; padding: 2px 14px 2px 10px; font-size: 15px; color: var(--ui-text); cursor: pointer; transition: background-color .12s; }
+    .org-row:hover { background: var(--ui-primary-softer); }
+    .org-row-selected { box-shadow: inset 3px 0 0 var(--ui-primary); background: var(--ui-primary-softer); }
+    .org-row-selected:hover { background: var(--ui-primary-soft); }
     .org-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .org-rowbadges { display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; }
     .org-rowbadges .ui-badge:empty { display: none; }
-    .org-meta { font-size: 12px; color: var(--ui-text-2); text-align: right; white-space: nowrap; }
+    .org-meta { font-size: 13px; color: var(--ui-text-2); text-align: right; white-space: nowrap; }
     .org-rec { justify-self: start; }
     .org-rec-ghost { visibility: hidden; }  /* 占位不显示，保住行内列对齐 */
     .org-empty-success i { color: var(--ui-success); opacity: .9; }
-    .org-result-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px var(--ui-sp-5); border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
+    .org-result-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 12px var(--ui-sp-5); border-bottom: 1px solid var(--ui-border); font-size: 16px; font-weight: 600; color: var(--ui-text); }
     .org-result-head .ui-row-actions { margin-left: auto; }
-    .org-result-sec { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 6px 0; font-size: 13px; color: var(--ui-text); }
+    .org-result-sec { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; padding: 6px 0; font-size: 15px; color: var(--ui-text); }
     .org-fail-list { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 8px; max-height: 200px; overflow-y: auto; }
-    .org-fail-row, .org-repair-row { font-size: 12px; color: var(--ui-text-2); word-break: break-all; }
-    .org-fail-row { color: #b91c1c; }
-    .org-result-hint { margin-top: 8px; font-size: 12px; color: #b45309; }
+    .org-fail-row, .org-repair-row { font-size: 13px; color: var(--ui-text-2); word-break: break-all; }
+    .org-fail-row { color: var(--ui-danger); }
+    .org-result-hint { margin-top: 8px; font-size: 13px; color: var(--ui-warning); }
     .org-filelist { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin: 10px 0 0; padding: 8px 10px; background: var(--ui-bg); border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
-    .org-filelist-row { font-size: 12px; color: var(--ui-text-2); }
-    .org-note { margin: 10px 0 0; font-size: 12px; color: var(--ui-text-3); }
+    .org-filelist-row { font-size: 13px; color: var(--ui-text-2); }
+    .org-note { margin: 10px 0 0; font-size: 13px; color: var(--ui-text-3); }
     @media (max-width: 767.98px) {
         .org-row { display: flex; flex-wrap: wrap; row-gap: 2px; min-height: 0; padding: 6px 14px 6px 10px; }
         .org-name { flex: 1 1 auto; min-width: 55%; white-space: normal; }
-        .org-spec { order: 8; flex-basis: 100%; text-align: left; padding-left: 38px; }  /* 规格列折行 */
+        .org-spec { order: 8; flex-basis: 100%; text-align: left; padding-left: 46px; }  /* 规格列折行 */
         .org-stats-row { gap: 8px 20px; }
         .org-stat-value { max-width: 200px; }
     }
@@ -63,10 +61,10 @@
 
 <div x-data="organizePage()" x-cloak>
     <!-- 1. 页头：标题 + 说明 + 删除模式徽章 -->
-    <div class="org-pagehead">
+    <div class="page-head">
         <div>
-            <h4><i class="bi bi-collection"></i> 音乐整理</h4>
-            <p class="org-desc">扫描下载目录，识别重复文件与多音质版本，勾选后安全清理其余文件。</p>
+            <h1 class="page-title">整理</h1>
+            <p class="page-desc">扫描下载目录，找出重复的文件和同一首歌的多个音质版本，勾选后清理多余的。</p>
         </div>
         <span class="ui-badge" x-show="directDelete !== null"
               :class="directDelete ? 'ui-badge-warning' : 'ui-badge-success'"

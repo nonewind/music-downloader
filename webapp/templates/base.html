@@ -2,97 +2,76 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>{% block title %}Deen音乐下载器{% endblock %}</title>
     {# 关键 CSS 内联（先于外部样式表）：整页导航时 WebView 清屏后立即
        绘制应用底色而非 WebView 默认黑底（色值与 app.css --ui-bg 同步
        维护）；x-cloak 规则内联避免外部 CSS 未到达时受控元素闪现 #}
     <style>
-        html { background: #f6f7f9; color-scheme: light; }
+        html { background: #f6f6f3; color-scheme: light; }
         [x-cloak] { display: none !important; }
     </style>
     <link href="{{ url_for('static', filename='vendor/bootstrap-icons/1.11.3/font/bootstrap-icons.min.css') }}" rel="stylesheet">
-    {# Frontend 2.0：CSS 也走 static_v 缓存戳（与 JS 一致，改样式即失效缓存） #}
+    {# CSS 也走 static_v 缓存戳（与 JS 一致，改样式即失效缓存） #}
     <link href="{{ static_v('css/app.css') }}" rel="stylesheet">
     <script>
         // 网关根前缀（统一网关模式下为 /app/deen-music-downloader，普通模式为空串）。
         // app.js 的 api() 用它拼接所有相对请求；模板内链接统一用 url_for，无需该变量。
         window.APP_BASE = {{ request.script_root | tojson }};
     </script>
-    {# Frontend 2.0 UI 宏（base 自身可见；子模板 block 内使用需在页面顶部自行 import —— Jinja import 作用域为模块级） #}
-    {% import "macros/ui.html" as ui %}
 </head>
-<body x-data="{ sidebar: false }" @keydown.escape.window="sidebar = false">
+<body>
     <noscript>
-        <div class="noscript-tip">
-            JavaScript 未启用：小屏侧栏抽屉与部分交互不可用；页面导航链接与退出登录仍可直接点击使用。
-        </div>
+        <div class="noscript-tip">JavaScript 未启用：页面导航仍可点击，但搜索、下载等操作不可用。</div>
     </noscript>
-    <!-- 侧边栏：桌面（≥992px）CSS 常驻固定，不受 sidebar 状态影响；
-         小屏为 Alpine 抽屉（汉堡开 / 遮罩与 ESC 关），无 Alpine 时桌面端完全可用 -->
-    <aside class="app-sidebar" id="appSidebar" :class="{ open: sidebar }" aria-label="主导航">
-        <a href="{{ url_for('views.dashboard') }}" class="sidebar-brand">
-            <i class="bi bi-music-note-beamed"></i>
-            <span>Deen音乐下载器</span>
-            <small>v{{ version }}</small>
-            <button type="button" class="sidebar-close d-lg-none" @click.stop="sidebar = false" aria-label="关闭菜单">&times;</button>
-        </a>
-        <nav class="sidebar-nav">
-            <a href="{{ url_for('views.dashboard') }}" class="sidebar-item {% if active_page == 'dashboard' %}active{% endif %}">
-                <i class="bi bi-house-door"></i><span>总览</span>
-            </a>
-            <a href="{{ url_for('views.discover') }}" class="sidebar-item {% if active_page == 'discover' %}active{% endif %}">
-                <i class="bi bi-compass"></i><span>发现</span>
-            </a>
-            <a href="{{ url_for('views.playlists') }}" class="sidebar-item {% if active_page == 'playlists' %}active{% endif %}">
-                <i class="bi bi-music-note-list"></i><span>歌单管理</span>
-            </a>
-            <a href="{{ url_for('views.accounts') }}" class="sidebar-item {% if active_page == 'accounts' %}active{% endif %}">
-                <i class="bi bi-person-gear"></i><span>账号管理</span>
-            </a>
-            <a href="{{ url_for('views.history') }}" class="sidebar-item {% if active_page == 'history' %}active{% endif %}">
-                <i class="bi bi-download"></i><span>下载</span>
-            </a>
-            <a href="{{ url_for('views.organize') }}" class="sidebar-item {% if active_page == 'organize' %}active{% endif %}">
-                <i class="bi bi-collection"></i><span>音乐整理</span>
-            </a>
-            <a href="{{ url_for('views.settings') }}" class="sidebar-item {% if active_page == 'settings' %}active{% endif %}">
-                <i class="bi bi-gear"></i><span>设置</span>
-            </a>
-        </nav>
-    </aside>
 
-    <!-- 小屏抽屉遮罩：桌面端由 CSS 强制隐藏 -->
-    <div class="sidebar-backdrop" x-cloak x-show="sidebar" @click="sidebar = false" aria-hidden="true"></div>
-
-    <div class="app-main">
-        <header class="app-topbar">
-            <button class="topbar-burger d-lg-none" type="button" @click="sidebar = true" aria-label="菜单">
-                <i class="bi bi-list"></i>
-            </button>
-            <nav class="app-breadcrumb" aria-label="breadcrumb">
-                {% set page_titles = {'dashboard':'总览','discover':'发现','playlists':'歌单管理','accounts':'账号管理','history':'下载','organize':'音乐整理','settings':'设置'} %}
-                <span class="crumb-page">{{ page_titles.get(active_page, '') }}</span>
-                <span class="crumb-sep d-none">/</span><span class="crumb-sub d-none" id="crumbSub"></span>
+    {# 导航：同一份结构，电脑显示在顶部，手机显示在底部（见 app.css .app-nav） #}
+    <header class="app-nav">
+        <div class="app-nav-inner">
+            <a href="{{ url_for('views.discover') }}" class="app-brand">
+                <i class="bi bi-music-note-beamed"></i>
+                <span>Deen音乐下载器</span>
+                <small>v{{ version }}</small>
+            </a>
+            <nav class="app-tabs" aria-label="主导航">
+                <a href="{{ url_for('views.discover') }}" class="app-tab {% if active_page == 'discover' %}active{% endif %}">
+                    <i class="bi bi-search"></i><span>找歌</span>
+                </a>
+                <a href="{{ url_for('views.history') }}" class="app-tab {% if active_page == 'history' %}active{% endif %}">
+                    <i class="bi bi-download"></i><span>下载</span>
+                    {# 失败数角标：app.js 每轮任务轮询写入，为 0 时隐藏 #}
+                    <span class="app-tab-badge d-none" id="navFailBadge"><span id="navFailNum">0</span><span class="app-tab-badge-word"> 失败</span></span>
+                </a>
+                <a href="{{ url_for('views.organize') }}" class="app-tab {% if active_page == 'organize' %}active{% endif %}">
+                    <i class="bi bi-collection"></i><span>整理</span>
+                </a>
+                <a href="{{ url_for('views.settings') }}" class="app-tab {% if active_page == 'settings' %}active{% endif %}">
+                    <i class="bi bi-sliders"></i><span>设置</span>
+                </a>
             </nav>
-            <div class="topbar-right"></div>
-        </header>
+        </div>
+    </header>
 
-        <main class="app-content">
-            {% block content %}{% endblock %}
-        </main>
+    <main class="app-content">
+        {% block content %}{% endblock %}
+    </main>
 
-        <footer class="app-statusbar" id="appStatusbar" role="button" tabindex="0" title="查看下载任务">
-            <span class="status-summary" id="statusSummary"><i class="bi bi-download"></i> 队列空闲</span>
-            <span class="status-current d-none" id="statusCurrent"></span>
-        </footer>
+    {# 下载条：有下载任务时由 app.js 填内容并给 body 加 has-dlbar 滑出；点击进下载页 #}
+    <div class="app-dlbar" id="appDlbar">
+        <a class="app-dlbar-box" href="{{ url_for('views.history') }}">
+            <div class="app-dlbar-line">
+                <span class="app-dlbar-title" id="dlbarTitle"></span>
+                <span class="app-dlbar-side" id="dlbarSide"></span>
+            </div>
+            <div class="app-dlbar-prog"><span id="dlbarProg"></span></div>
+        </a>
     </div>
 
     {# 全局提示容器：showToast（app.js）向内写入 .ui-toast 结构并自动消失 #}
     <div class="ui-toast-wrap" id="global-toast" aria-live="polite" aria-atomic="false"></div>
 
     {# 脚本顺序契约：alpine(defer，解析完成后执行) → app.js（注册 alpine:init /
-       全局工具）→ 各页 block scripts；全站交互均为 Alpine/原生 JS，无 bootstrap #}
+       全局工具）→ 各页 block scripts；全站交互均为 Alpine/原生 JS #}
     <script defer src="{{ static_v('vendor/alpine/3.14.9/alpine.min.js') }}"></script>
     <script src="{{ static_v('js/app.js') }}"></script>
     {% block scripts %}{% endblock %}

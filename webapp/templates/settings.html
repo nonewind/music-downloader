@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{# Frontend 2.0：base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
+{# base 的 import 不进子模板作用域，页面自行引入 UI 宏库 #}
 {% import "macros/ui.html" as ui %}
 {% block title %}设置 - Deen音乐下载器{% endblock %}
 {% block content %}
@@ -7,35 +7,34 @@
     /* 设置页局部样式（set- 前缀，页面自治；ui- 组件层不改动）。
        UI-05 布局重写：放弃 auto-fill 多列网格（高度差异大的表单卡片横向
        铺排会产生大片留白），改为左侧分类导航 + 右侧单列表单面板 */
-    .set-pagehead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
-    .set-pagehead h4 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 18px; font-weight: 600; color: var(--ui-text); }
-    .set-layout { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 18px; align-items: start; }
+    .set-layout { display: grid; grid-template-columns: 172px minmax(0, 1fr); gap: 24px; align-items: start; }
 
     /* 左侧分类导航：宽屏 sticky 纵排；窄屏退化为顶部横向 chips */
     .set-nav { position: sticky; top: calc(var(--topbar-h) + 16px); display: flex; flex-direction: column; gap: 2px; }
     .set-navitem {
         display: flex; align-items: center; gap: 8px;
-        padding: 8px 12px; border: 0; border-radius: var(--ui-r-s);
+        min-height: 44px; padding: 8px 12px; border: 0; border-radius: var(--ui-r-s);
         background: transparent; color: var(--ui-text-2);
-        font-size: 13px; font-weight: 500; text-align: left; cursor: pointer;
+        font-size: 15px; font-weight: 500; text-align: left; cursor: pointer;
         transition: background-color .12s, color .12s;
     }
     .set-navitem i { font-size: 15px; color: var(--ui-text-3); }
-    .set-navitem:hover { color: var(--ui-text); background: rgba(30, 36, 48, .05); }
+    .set-navitem:hover { color: var(--ui-text); background: #ecece7; }
     .set-navitem.active { background: var(--ui-surface); color: var(--ui-primary); font-weight: 600; box-shadow: inset 2px 0 0 var(--ui-primary), var(--ui-shadow-1); }
     .set-navitem.active i { color: var(--ui-primary); }
 
     /* 右侧主区：单列卡片纵排，宽度上限约束表单行长 */
-    .set-main { display: flex; flex-direction: column; gap: 14px; max-width: 780px; min-width: 0; }
+    .set-main { min-width: 0; }
+    .set-form { display: flex; flex-direction: column; gap: 14px; max-width: 780px; }
     .set-panel { display: flex; flex-direction: column; gap: 14px; }
-    .set-cardhead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ui-border); font-size: 14px; font-weight: 600; color: var(--ui-text); }
+    .set-cardhead { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--ui-border); font-size: 16px; font-weight: 600; color: var(--ui-text); }
     .set-cardhead i { color: var(--ui-text-3); font-size: 16px; }
     .set-body { padding: 16px; }
     .set-field { margin-bottom: 16px; }
     .set-field:last-child { margin-bottom: 0; }
-    .set-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .set-label { display: block; margin-bottom: 6px; font-size: 15px; font-weight: 600; color: var(--ui-text); }
     .set-input { width: 100%; max-width: 420px; }
-    .set-hint { margin-top: 4px; font-size: 12px; color: var(--ui-text-3); }
+    .set-hint { margin-top: 4px; font-size: 13px; color: var(--ui-text-3); }
 
     /* 局部多列：仅用于语义并列的短字段（音质三平台 / 成对数字输入） */
     .set-cols-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
@@ -47,21 +46,21 @@
 
     /* 开关组：纵排一行一项（含说明文字，横排挤压不可读） */
     .set-checks { display: flex; flex-direction: column; gap: 10px; }
-    .set-check { display: flex; align-items: flex-start; gap: 4px; font-size: 13px; color: var(--ui-text); cursor: pointer; }
+    .set-check { display: flex; align-items: flex-start; gap: 4px; font-size: 15px; color: var(--ui-text); cursor: pointer; }
     .set-check .ui-check { flex-shrink: 0; }
-    .set-checktext { line-height: 28px; min-width: 0; }
-    .set-checktext small { display: block; margin-top: 2px; font-size: 12px; line-height: 1.5; color: var(--ui-text-3); }
+    .set-checktext { padding: 7px 0; line-height: 1.5; min-width: 0; }
+    .set-checktext small { display: block; margin-top: 2px; font-size: 13px; line-height: 1.5; color: var(--ui-text-3); }
     .set-scope { display: inline-flex; gap: 16px; flex-wrap: wrap; }
 
     /* API 服务子块 */
     .set-svc { padding: 14px 0; }
     .set-svc:first-of-type { padding-top: 2px; }
     .set-svc + .set-svc { border-top: 1px solid var(--ui-border); }
-    .set-svchead { font-size: 13px; font-weight: 600; color: var(--ui-text); }
+    .set-svchead { font-size: 15px; font-weight: 600; color: var(--ui-text); }
     .set-svcstatus { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; min-height: 22px; }
-    .set-svcdetail { font-size: 12px; color: var(--ui-text-3); }
+    .set-svcdetail { font-size: 13px; color: var(--ui-text-3); }
     .set-svcctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-    .set-inlinelabel { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ui-text-2); }
+    .set-inlinelabel { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; color: var(--ui-text-2); }
     .set-port { width: 100px; }
     .set-locked { opacity: .5; pointer-events: none; }
     .set-customrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
@@ -69,35 +68,60 @@
     .set-url { flex: 1 1 240px; max-width: 400px; }
 
     /* 旧结构文件迁移提示条 */
-    .set-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .08); border-radius: var(--ui-r-s); font-size: 12px; color: var(--ui-text); }
+    .set-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border: 1px solid rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .08); border-radius: var(--ui-r-s); font-size: 13px; color: var(--ui-text); }
     .set-banner .ui-btn { margin-left: auto; }
 
     /* 保存栏：sticky 常驻底部，跨分类可见 */
-    .set-savebar { position: sticky; bottom: 10px; z-index: 800; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
-    .set-dirty { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: 12px; color: var(--ui-warning); }
+    .set-savebar { position: sticky; bottom: calc(var(--app-bottom) + 10px); z-index: 800; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 10px 14px; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-r-m); box-shadow: var(--ui-shadow-2); }
+    .set-dirty { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; font-size: 13px; color: var(--ui-warning); }
     .set-dirty i { font-size: 8px; }
 
     /* 窄屏：分类导航变顶部横向滚动 chips，表单列退化为单列 */
     @media (max-width: 991.98px) {
         .set-layout { grid-template-columns: 1fr; gap: 10px; }
         .set-nav { position: static; flex-direction: row; gap: 6px; overflow-x: auto; padding: 2px 2px 6px; -webkit-overflow-scrolling: touch; }
-        .set-navitem { flex-shrink: 0; white-space: nowrap; padding: 6px 12px; border: 1px solid var(--ui-border); border-radius: 999px; background: var(--ui-surface); }
+        .set-navitem { flex-shrink: 0; white-space: nowrap; padding: 6px 16px; border: 1px solid var(--ui-border-strong); border-radius: 999px; background: var(--ui-surface); }
         .set-navitem.active { box-shadow: none; border-color: var(--ui-primary); }
+    }
+
+    /* 账号栏（acct- 前缀） */
+    .acct-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+    .acct-hint { padding: 20px; font-size: 15px; color: var(--ui-text-2); }
+    .acct-row .list-sub { white-space: normal; }
+    .acct-checkline { font-size: 13px; color: var(--ui-text-3); }
+    .acct-text-ok { color: var(--ui-success); }
+    .acct-text-danger { color: var(--ui-danger); }
+    .acct-label { display: block; margin-bottom: 14px; font-size: 15px; color: var(--ui-text); }
+    .acct-label .ui-select, .acct-label .ui-input { display: block; width: 100%; margin-top: 6px; }
+    .acct-label textarea.ui-input { height: auto; min-height: 80px; padding: 8px 12px; resize: vertical; font-family: inherit; }
+    .acct-formhint { margin: -8px 0 14px; font-size: 13px; color: var(--ui-text-2); }
+    .acct-qrbtns { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+    .acct-qrbtns .ui-btn { white-space: normal; height: auto; min-height: 36px; padding-top: 6px; padding-bottom: 6px; line-height: 1.3; text-align: left; }
+    .acct-qrpanel { margin: 8px 0 14px; text-align: center; }
+    .acct-qrpanel img { max-width: 200px; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); background: #fff; }
+    .acct-qrstatus { margin-top: 6px; font-size: 14px; color: var(--ui-text-2); }
+    .acct-qrstatus.is-success { color: var(--ui-success); }
+    .acct-qrstatus.is-error { color: var(--ui-danger); }
+    @media (max-width: 767.98px) {
+        .acct-row { flex-wrap: wrap; }
+        .acct-row .list-main { flex-basis: 100%; }
+        .acct-row .list-side { flex: 1; justify-content: space-between; }
     }
 </style>
 
 <div x-data="settingsPage()" x-cloak>
     <!-- 页头 -->
-    <div class="set-pagehead">
-        <h4><i class="bi bi-gear"></i> 设置</h4>
-        <span class="ui-text-3" style="font-size: 12px">配置全局生效，保存后立即应用于所有用户</span>
+    <div class="page-head">
+        <h1 class="page-title">设置</h1>
     </div>
 
-    <form @submit.prevent="save()">
         <div class="set-layout">
 
             <!-- 左侧分类导航（当前分类随地址栏 hash 记忆，刷新不丢） -->
             <nav class="set-nav" aria-label="配置分类">
+                <button type="button" class="set-navitem" :class="{ active: section === 'accounts' }" @click="goSection('accounts')">
+                    <i class="bi bi-person"></i><span>账号</span>
+                </button>
                 <button type="button" class="set-navitem" :class="{ active: section === 'general' }" @click="goSection('general')">
                     <i class="bi bi-sliders"></i><span>常规</span>
                 </button>
@@ -120,6 +144,163 @@
 
             <!-- 右侧面板：一次只显示一个分类，表单以单列为主 -->
             <div class="set-main">
+
+                <!-- 账号：平台筛选 + 一行一个账号（独立组件 accountsPage，不在设置表单里） -->
+                <div class="set-panel" x-show="section === 'accounts'" x-data="accountsPage()">
+                    <div class="acct-head">
+                        <div class="chips" role="group" aria-label="平台筛选">
+                            <template x-for="t in platformTabs" :key="t.key">
+                                <button type="button" class="chip"
+                                        :class="{ active: platform === t.key }"
+                                        :aria-pressed="platform === t.key ? 'true' : 'false'"
+                                        @click="switchPlatform(t.key)">
+                                    <span x-text="t.name"></span>
+                                    <span class="ui-mono" x-text="counts[t.key]"></span>
+                                </button>
+                            </template>
+                        </div>
+                        <div class="page-actions">
+                            {{ ui.btn('导入', 'ghost', size='sm', icon='upload', attrs={'@click': 'pickImportFile()'}) }}
+                            {{ ui.btn('导出', 'ghost', size='sm', icon='download', attrs={'@click': 'exportClick()'}) }}
+                            {{ ui.btn('添加账号', 'primary', size='sm', icon='plus-lg', attrs={'@click': 'openAdd()'}) }}
+                            <input type="file" x-ref="importFile" accept=".json" hidden @change="onImportFile($event)">
+                        </div>
+                    </div>
+
+                    <div class="list-card">
+                        <div class="acct-hint" x-show="loading && !accounts.length">加载中…</div>
+                        <div class="acct-hint" x-show="!loading && !filteredAccounts.length">
+                            这里还没有账号。添加账号以后才能下载需要登录或会员的歌曲。
+                        </div>
+                        <template x-for="(a, idx) in filteredAccounts" :key="a.id">
+                            <div class="list-row acct-row">
+                                <div class="list-main">
+                                    <div class="list-title">
+                                        <span class="ui-truncate" x-text="a.name" :title="a.name"></span>
+                                        <span class="ui-badge" :class="platBadgeCls(a.platform)" x-text="a.platform_name || platName(a.platform)"></span>
+                                        <span class="ui-badge" :class="a.vip_type > 0 ? 'ui-badge-warning' : 'ui-badge-muted'" x-text="a.vip_text"></span>
+                                    </div>
+                                    <div class="list-sub">
+                                        <span x-text="a.nickname || '未获取昵称'"></span>
+                                        · 会员到期 <span :class="expireMeta(a).cls" x-text="expireMeta(a).text"></span>
+                                        · 本月已下 <span :class="quotaCls(a)" x-text="quotaText(a)"></span>
+                                    </div>
+                                    <div class="acct-checkline" x-text="'上次校验 ' + (a.last_check_at || '从未校验')"></div>
+                                </div>
+                                <div class="list-side">
+                                    <span class="ui-switch" :title="a.enabled ? '已启用' : '已停用'">
+                                        <input type="checkbox" role="switch" :checked="a.enabled"
+                                               :aria-label="'启用：' + a.name"
+                                               @change="toggleEnabled(a, $event.target.checked)">
+                                        <span class="ui-switch-track"></span>
+                                    </span>
+                                    <span class="ui-row-actions">
+                                        {# 排序只在单个平台里有意义（后端在同平台内交换），「全部」下不显示 #}
+                                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                                x-show="platform !== 'all'"
+                                                :disabled="idx === 0" title="上移（排前面的先用）" aria-label="上移"
+                                                @click="moveAccount(a, 'up')"><i class="bi bi-arrow-up"></i></button>
+                                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                                x-show="platform !== 'all'"
+                                                :disabled="idx === filteredAccounts.length - 1" title="下移" aria-label="下移"
+                                                @click="moveAccount(a, 'down')"><i class="bi bi-arrow-down"></i></button>
+                                        <button type="button" class="ui-btn ui-btn-secondary ui-btn-sm"
+                                                :disabled="testBusy.has(a.id)" :class="{ 'is-loading': testBusy.has(a.id) }"
+                                                title="测试这个账号还能不能用" @click="testLogin(a)">测试</button>
+                                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                                title="编辑" aria-label="编辑" @click="openEdit(a)"><i class="bi bi-pencil"></i></button>
+                                        <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
+                                                title="删除" aria-label="删除" @click="confirmDelete(a)"><i class="bi bi-trash"></i></button>
+                                    </span>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
+                    <p class="set-hint">
+                        多个账号怎么轮着用，在「多账号」一栏里设置；要调整先后顺序，先点上面的平台再用箭头。
+                        会员到期时间在添加、编辑、测试账号时自动刷新（酷狗不提供到期时间，显示「酷狗未提供」属正常）。
+                    </p>
+
+    {# 添加账号弹窗：平台联动 placeholder/提示文案；三平台扫码登录区（网易云 1 键 /
+       酷狗 1 键 / QQ+微信双按钮）；轮询状态由 qr 状态机驱动（等待/轮询中/成功/拒绝/过期） #}
+    {% set add_body %}
+    <label class="acct-label">平台
+        <select class="ui-select" @change="onAddPlatformChange($event.target.value)">
+            <template x-for="p in addPlatformOptions" :key="p.key">
+                <option :value="p.key" :selected="addForm.platform === p.key" x-text="p.name"></option>
+            </template>
+        </select>
+    </label>
+    <label class="acct-label">账号别名
+        <input type="text" class="ui-input" x-model="addForm.name" placeholder="如：主账号">
+    </label>
+    <label class="acct-label">Cookie
+        <textarea class="ui-input" rows="3" x-model="addForm.cookie"
+                  :placeholder="addHint(addForm.platform).placeholder"></textarea>
+    </label>
+    <div class="acct-formhint" x-text="addHint(addForm.platform).hint"></div>
+
+    <!-- 扫码登录入口（随平台联动；酷狗 status=3 取消授权、QQ 以 identifier/login_type 轮询） -->
+    <div class="acct-qrbtns" x-show="addForm.platform === 'netease'">
+        {{ ui.btn('扫码登录（网易云APP扫码，自动填入 Cookie）', 'secondary', size='sm', icon='qr-code',
+                  attrs={':disabled': "qrCreating('netease')", ':class': "{ 'is-loading': qrCreating('netease') }",
+                         '@click': "startQrLogin('netease')"}) }}
+    </div>
+    <div class="acct-qrbtns" x-show="addForm.platform === 'kugou'">
+        {{ ui.btn('扫码登录（酷狗APP扫码，自动填入 Cookie）', 'secondary', size='sm', icon='qr-code',
+                  attrs={':disabled': "qrCreating('kugou')", ':class': "{ 'is-loading': qrCreating('kugou') }",
+                         '@click': "startQrLogin('kugou')"}) }}
+    </div>
+    <div class="acct-qrbtns" x-show="addForm.platform === 'qq'">
+        {{ ui.btn('QQ扫码登录', 'secondary', size='sm', icon='qr-code',
+                  attrs={':disabled': "qrCreating('qq')", ':class': "{ 'is-loading': qrCreating('qq') }",
+                         '@click': "startQrLogin('qq', 'qq')"}) }}
+        {{ ui.btn('微信扫码登录', 'secondary', size='sm', icon='wechat',
+                  attrs={':disabled': "qrCreating('qq')", ':class': "{ 'is-loading': qrCreating('qq') }",
+                         '@click': "startQrLogin('qq', 'wx')"}) }}
+    </div>
+    <div class="acct-qrpanel" x-show="qr.platform !== '' && qr.status !== 'idle'">
+        <img x-show="qr.qrImg" :src="qr.qrImg" :alt="qr.platform && platName(qr.platform) + '登录二维码'">
+        <div class="acct-qrstatus"
+             :class="{ 'is-success': qr.status === 'success', 'is-error': qr.status === 'error' }"
+             x-text="qr.message"></div>
+    </div>
+
+    <label class="acct-label">月度总额度（0=不限制）
+        <input type="number" class="ui-input" x-model.number="addForm.quota_limit" min="0">
+    </label>
+    <div class="acct-formhint">设为 0 表示不限制；设置后达到额度会自动切换下一个账号</div>
+    {% endset %}
+    {% set add_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.addAcc = false'}) }}
+    {{ ui.btn('添加', 'primary', attrs={':disabled': 'addBusy', ':class': "{ 'is-loading': addBusy }", '@click': 'confirmAdd()'}) }}
+    {% endset %}
+    {{ ui.modal('addAcc', '添加账号', add_body, add_footer) }}
+
+    {# 编辑账号弹窗：平台只读；Cookie 留空不改；额度可编辑 #}
+    {% set edit_body %}
+    <label class="acct-label">平台
+        <input type="text" class="ui-input" :value="editForm.platformLabel" readonly disabled>
+    </label>
+    <label class="acct-label">账号别名
+        <input type="text" class="ui-input" x-model="editForm.name">
+    </label>
+    <label class="acct-label">Cookie（留空不修改）
+        <textarea class="ui-input" rows="3" x-model="editForm.cookie" placeholder="留空表示不修改 Cookie"></textarea>
+    </label>
+    <label class="acct-label">月度总额度（0=不限制）
+        <input type="number" class="ui-input" x-model.number="editForm.quota_limit" min="0">
+    </label>
+    {% endset %}
+    {% set edit_footer %}
+    {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.editAcc = false'}) }}
+    {{ ui.btn('保存', 'primary', attrs={':disabled': 'editBusy', ':class': "{ 'is-loading': editBusy }", '@click': 'confirmEdit()'}) }}
+    {% endset %}
+    {{ ui.modal('editAcc', '编辑账号', edit_body, edit_footer) }}
+                </div>
+
+                <form class="set-form" x-show="section !== 'accounts'" @submit.prevent="save()">
 
                 <!-- 常规：Web 服务 + 目录结构 -->
                 <div class="set-panel" x-show="section === 'general'">
@@ -240,7 +421,7 @@
                             <label class="set-check">
                                 <span class="ui-check"><input type="checkbox" x-model="form.organize_direct_delete"></span>
                                 <span class="set-checktext">音乐整理删除模式
-                                    <small>音乐整理页清理重复文件时：开启=直接删除（不可恢复）；关闭=移入下载目录 .trash 回收站（可手动恢复，默认）</small>
+                                    <small>整理页清理重复文件时：开启=直接删除（不可恢复）；关闭=移入下载目录 .trash 回收站（可手动恢复，默认）</small>
                                 </span>
                             </label>
                         </div>
@@ -311,7 +492,7 @@
                                 </select>
                                 <div class="set-hint">
                                     <i class="bi bi-info-circle"></i>
-                                    接力模式：优先用账号1，达额度或失败才切换；轮询模式：每个任务轮流分配账号。账号顺序在「账号管理」页调整。
+                                    接力模式：优先用账号1，达额度或失败才切换；轮询模式：每个任务轮流分配账号。账号的先后顺序在「账号」里调整。
                                 </div>
                             </div>
                             <div class="set-field">
@@ -330,7 +511,7 @@
                             <div class="set-field">
                                 <label class="set-label">QQ cookie 自动保活间隔（小时）</label>
                                 <input type="number" class="ui-input set-input" x-model="form.qq_keepalive_hours" min="0" max="24">
-                                <div class="set-hint">定期刷新 QQ 音乐登录凭证（musickey），避免网页 cookie 长期不刷新提前失效；0=关闭。刷新结果写入账号管理页的 cookie 字段并记录日志</div>
+                                <div class="set-hint">定期刷新 QQ 音乐登录凭证（musickey），避免网页 cookie 长期不刷新提前失效；0=关闭。刷新结果写入对应账号的 cookie 并记录日志</div>
                             </div>
                         </div>
                     </div>
@@ -424,12 +605,13 @@
                     </button>
                 </div>
 
+                </form>
             </div>
         </div>
-    </form>
 </div>
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ static_v('js/accounts.js') }}"></script>
 <script src="{{ static_v('js/settings.js') }}"></script>
 {% endblock %}
