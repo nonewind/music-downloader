@@ -17,7 +17,7 @@
 - DELETE /api/tasks/<pk>          删除指定下载任务（中止传输并清理临时文件）
 - POST   /api/tasks/pause-all     暂停全部下载任务
 - POST   /api/tasks/resume-all    继续全部下载任务
-- GET    /api/stats               获取统计数据（总览页用）
+- GET    /api/stats               获取统计数据（原总览页用；0.10.0.0 起页面不再调用，接口保留）
 - GET    /api/settings            获取配置
 - PUT    /api/settings            保存配置
 - GET    /api/ncm/status          获取内置网易云API服务状态
@@ -922,7 +922,7 @@ def resume_all_tasks():
 # ======================================================================
 @api_bp.route("/stats")
 def get_stats():
-    """总览页统计数据"""
+    """统计数据（原总览页用；0.10.0.0 起总览页取消，页面不再调用，接口保留）"""
     total = Song.query.count()
     success = Song.query.filter_by(status="success").count()
     failed = Song.query.filter_by(status="failed").count()
