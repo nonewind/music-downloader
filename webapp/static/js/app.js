@@ -191,6 +191,7 @@ function broadcastQueueChange(tasks, pausedAll) {
 // ============================================================
 // 下载条只在有任务时出现：左边是这一批的整体进度（已完成 / 总数），
 // 右边是正在下的歌名和失败数；进度条按整批算，当前这首的进度也折算进去
+let _prevFailedCount = null;
 function renderDlbar(tasks, pausedAll, failedCount, batch) {
     // 第 1 步：导航上的失败角标
     const badge = document.getElementById("navFailBadge");
@@ -198,6 +199,14 @@ function renderDlbar(tasks, pausedAll, failedCount, batch) {
     if (badge && badgeNum) {
         badgeNum.textContent = String(failedCount);
         badge.classList.toggle("d-none", failedCount === 0);
+        // 失败数变多时角标跳一下：先去掉类、强制重排，再加回去才能重播动画
+        // （页面刚打开的第一次不算）
+        if (_prevFailedCount !== null && failedCount > _prevFailedCount) {
+            badge.classList.remove("is-bump");
+            void badge.offsetWidth;
+            badge.classList.add("is-bump");
+        }
+        _prevFailedCount = failedCount;
     }
 
     // 第 2 步：没有任务就收起下载条
@@ -350,7 +359,10 @@ window.uiConfirm = function(opts = {}) {
             if (done) return;
             done = true;
             document.removeEventListener("keydown", onKey);
-            mask.remove();
+            // 退场：遮罩淡出、弹窗缩回（样式见 app.css 的 is-leaving），播完再移除
+            mask.classList.add("is-leaving");
+            requestAnimationFrame(() => mask.classList.add("is-leaving-to"));
+            setTimeout(() => mask.remove(), 200);
             resolve(result);
         };
         const onKey = (e) => {

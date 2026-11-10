@@ -23,6 +23,8 @@
     .lib-back { flex-shrink: 0; }
     @media (min-width: 768px) { .lib-back-artists { display: none; } }
     .lib-sec { margin: 18px 0 8px; font-size: 15px; font-weight: 600; color: var(--ui-text-2); }
+    .lib-fold-arrow { transition: transform .2s ease; }
+    .lib-fold-arrow.is-open { transform: rotate(90deg); }
     .lib-fold { display: flex; align-items: center; gap: 6px; width: 100%; margin: 18px 0 8px; padding: 0; border: 0; background: transparent; font-size: 15px; font-weight: 600; color: var(--ui-text-2); text-align: left; }
     .lib-row { cursor: pointer; min-height: 56px; padding: 10px 16px; }
     .lib-row:hover { background: var(--ui-primary-softer); }
@@ -178,7 +180,7 @@
         <!-- 5.1 歌手列表 -->
         <div class="lib-artists">
             <input type="search" class="ui-input" placeholder="找歌手" x-model="artistQuery" aria-label="找歌手">
-            <div class="lib-artist-list">
+            <div class="lib-artist-list ui-stagger">
                 <template x-for="a in filteredArtists" :key="a.name">
                     <button type="button" class="lib-artist" :class="{ 'is-on': artist && artist.name === a.name }"
                             @click="openArtist(a)">
@@ -206,7 +208,7 @@
                         </div>
                     </div>
 
-                    <div class="list-card" x-show="artistAlbums.length">
+                    <div class="list-card ui-stagger" x-show="artistAlbums.length">
                         <template x-for="al in artistAlbums" :key="al.dir">
                             <div class="list-row lib-row" @click="openAlbum(al)">
                                 <div class="list-main">
@@ -222,10 +224,11 @@
                         <div>
                             <button type="button" class="lib-fold" @click="singlesOpen = !singlesOpen"
                                     :aria-expanded="singlesOpen ? 'true' : 'false'">
-                                <i class="bi" :class="singlesOpen ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+                                <i class="bi bi-chevron-right lib-fold-arrow" :class="{ 'is-open': singlesOpen }"></i>
                                 <span x-text="'单曲 ' + artistSingles.length + ' 首'"></span>
                             </button>
-                            <div class="list-card" x-show="singlesOpen">
+                            <div class="ui-collapse" :class="{ 'is-open': singlesOpen }"><div class="ui-collapse-in">
+                            <div class="list-card">
                                 <template x-for="al in artistSingles" :key="al.dir">
                                     <div class="list-row lib-row" @click="openAlbum(al)">
                                         <div class="list-main">
@@ -236,6 +239,7 @@
                                     </div>
                                 </template>
                             </div>
+                            </div></div>
                         </div>
                     </template>
                 </div>
@@ -256,7 +260,7 @@
                                   attrs={':disabled': 'albumLoading || scanning || cleaning', '@click': 'openEdit()'}) }}
                     </div>
                     <div class="lib-hint" x-show="albumLoading">加载中…</div>
-                    <div class="list-card" x-show="!albumLoading && album.items">
+                    <div class="list-card ui-stagger" x-show="!albumLoading && album.items">
                         <template x-for="it in (album.items || [])" :key="it.path">
                             <label class="lib-song" :class="{ 'is-picked': picked.has(it.path) }">
                                 <span class="ui-check"><input type="checkbox" :checked="picked.has(it.path)"
@@ -390,7 +394,8 @@
                 <i class="bi bi-chevron-down org-arrow" :class="g.open ? 'org-arrow-open' : ''"></i>
             </div>
             <!-- 组内文件行（紧凑 32px；勾选行左侧主色细条） -->
-            <div class="org-group-body" x-show="g.open" x-transition.opacity.duration.150ms>
+            <div class="ui-collapse" :class="{ 'is-open': g.open }"><div class="ui-collapse-in">
+            <div class="org-group-body">
                 <template x-for="it in g.files" :key="it.path">
                     <label class="org-row" :class="g.checked.has(it.path) ? 'org-row-selected' : ''">
                         <span class="ui-check org-check">
@@ -420,6 +425,7 @@
                     </label>
                 </template>
             </div>
+            </div></div>
         </div>
     </template>
 

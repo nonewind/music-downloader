@@ -526,7 +526,7 @@ body.has-dlbar .app-dlbar {
     padding: 10vh var(--ui-sp-4) var(--ui-sp-4);
     background: rgba(26, 29, 33, .5);
     overflow-y: auto;
-    animation: ui-fade-in .16s ease-out;
+    animation: ui-fade-in .2s ease-out;
 }
 
 .ui-modal {
@@ -535,8 +535,18 @@ body.has-dlbar .app-dlbar {
     background: var(--ui-surface);
     border-radius: var(--ui-r-l);
     box-shadow: var(--ui-shadow-2);
-    animation: ui-modal-in .18s ease-out;
+    animation: ui-modal-in .26s cubic-bezier(.2, .9, .3, 1.1);
 }
+
+/* 弹窗退场：关闭时 Alpine（x-transition:leave）或 uiConfirm 给遮罩加
+   is-leaving → is-leaving-to，遮罩淡出、弹窗缩回（手机上滑回底部）。
+   入场动画不带 fill，结束后不再占着 transform，退场的过渡才生效 */
+/* is-entering 没有样式，只是让 Alpine 走「入场过渡」：关闭途中又打开时，
+   Alpine 只有在有入场过渡时才会取消正在进行的退场，否则弹窗会卡在半透明 */
+.ui-modal-mask.is-leaving { transition: opacity .18s ease; }
+.ui-modal-mask.is-leaving .ui-modal { transition: transform .18s ease, opacity .18s ease; }
+.ui-modal-mask.is-leaving-to { opacity: 0; }
+.ui-modal-mask.is-leaving-to .ui-modal { opacity: 0; transform: translateY(8px) scale(.97); }
 
 @keyframes ui-fade-in {
     from { opacity: 0; }
@@ -544,8 +554,14 @@ body.has-dlbar .app-dlbar {
 }
 
 @keyframes ui-modal-in {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(8px) scale(.96); }
     to   { opacity: 1; transform: none; }
+}
+
+/* 手机：弹窗是底部弹层，从屏幕底边滑上来 */
+@keyframes ui-sheet-in {
+    from { transform: translateY(100%); }
+    to   { transform: none; }
 }
 
 .ui-modal-header {
@@ -599,7 +615,9 @@ body.has-dlbar .app-dlbar {
         overflow-y: auto;
         border-radius: var(--ui-r-l) var(--ui-r-l) 0 0;
         padding-bottom: env(safe-area-inset-bottom, 0px);
+        animation: ui-sheet-in .3s cubic-bezier(.2, .8, .2, 1);
     }
+    .ui-modal-mask.is-leaving-to .ui-modal { opacity: 1; transform: translateY(100%); }
     .ui-modal-footer .ui-btn { flex: 1 1 auto; }
 }
 
@@ -629,8 +647,8 @@ body.has-dlbar .app-dlbar {
     font-size: 14px;
     pointer-events: auto;
     opacity: 0;
-    transform: translateY(-8px);
-    transition: opacity .18s ease, transform .18s ease;
+    transform: translateY(-16px) scale(.96);
+    transition: opacity .2s ease, transform .3s cubic-bezier(.2, .9, .3, 1.2);
 }
 
 .ui-toast.ui-toast-show { opacity: 1; transform: none; }
@@ -815,10 +833,11 @@ body.has-dlbar .app-dlbar {
     color: var(--ui-text);
     font-size: 15px;
     white-space: nowrap;
-    transition: background-color .15s, border-color .15s, color .15s;
+    transition: background-color .15s, border-color .15s, color .15s, transform .08s;
 }
 
 .chip:hover { border-color: var(--ui-text-3); }
+.chip:active { transform: scale(.96); }
 .chip.active { background: var(--ui-primary); border-color: var(--ui-primary); color: #fff; font-weight: 600; }
 .chip.active-dark { background: var(--ui-text); border-color: var(--ui-text); color: #fff; font-weight: 600; }
 .chips-sep { width: 1px; height: 24px; background: var(--ui-border-strong); margin: 0 4px; }
@@ -860,12 +879,55 @@ body.has-dlbar .app-dlbar {
 /* VIP 小标 */
 .tag-vip { flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: #f3e9d2; color: #7a5200; font-size: 11px; font-weight: 700; line-height: 16px; }
 
-/* 列表整体淡入（搜索结果等刚加载出来时） */
-.fade-in { animation: ui-rise-in .22s ease-out; }
+/* ---------- 动效 ---------- */
+/* 列表逐行出现：父元素加 ui-stagger，刚出现的行上浮淡入，前 12 行依次
+   错开 30ms，后面的行和第 12 行一起出现。x-for 的 <template> 也算第 1 个
+   子元素，所以从第 2 个算起。行已经在、只是内容变了时不会重播 */
+.ui-stagger > * { animation: ui-rise-in .3s cubic-bezier(.2, .8, .2, 1) both; animation-delay: .33s; }
+.ui-stagger > :nth-child(-n+2) { animation-delay: 0s; }
+.ui-stagger > :nth-child(3)  { animation-delay: .03s; }
+.ui-stagger > :nth-child(4)  { animation-delay: .06s; }
+.ui-stagger > :nth-child(5)  { animation-delay: .09s; }
+.ui-stagger > :nth-child(6)  { animation-delay: .12s; }
+.ui-stagger > :nth-child(7)  { animation-delay: .15s; }
+.ui-stagger > :nth-child(8)  { animation-delay: .18s; }
+.ui-stagger > :nth-child(9)  { animation-delay: .21s; }
+.ui-stagger > :nth-child(10) { animation-delay: .24s; }
+.ui-stagger > :nth-child(11) { animation-delay: .27s; }
+.ui-stagger > :nth-child(12) { animation-delay: .3s; }
 
 @keyframes ui-rise-in {
-    from { opacity: 0; transform: translateY(6px); }
+    from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: none; }
+}
+
+/* 展开折叠：高度慢慢展开 / 收起。结构是
+   <div class="ui-collapse" :class="{ 'is-open': 开关 }"><div class="ui-collapse-in">内容</div></div>
+   收起后 visibility 隐藏，键盘 Tab 不会跳进去 */
+.ui-collapse {
+    display: grid;
+    grid-template-rows: 0fr;
+    visibility: hidden;
+    transition: grid-template-rows .28s cubic-bezier(.2, .8, .2, 1), visibility 0s linear .28s;
+}
+
+.ui-collapse.is-open { grid-template-rows: 1fr; visibility: visible; transition-delay: 0s; }
+.ui-collapse-in { min-height: 0; overflow: hidden; }
+
+/* 「已下载」的对勾：出现时弹一下 */
+.list-state .bi-check2 { display: inline-block; animation: ui-pop .4s cubic-bezier(.3, 1.6, .5, 1) both; }
+
+@keyframes ui-pop {
+    from { opacity: 0; transform: scale(0); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* 导航失败角标：数字变多时跳一下（app.js 重新加 is-bump 触发） */
+.app-tab-badge.is-bump { display: inline-block; animation: ui-bump .4s ease; }
+
+@keyframes ui-bump {
+    0%, 100% { transform: none; }
+    40%      { transform: scale(1.3); }
 }
 
 @media (max-width: 767.98px) {

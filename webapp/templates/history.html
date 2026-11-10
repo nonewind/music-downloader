@@ -213,7 +213,7 @@
 
     {# 5. 删除三选 Modal（单删/批删共用，$store.modals.delSong；标题随单/批量，
        宏的 title 为静态文本，故按宏同款结构手写以承载 x-text 标题） #}
-    <div class="ui-modal-mask" id="delSong-mask" x-cloak x-show="$store.modals.delSong"
+    <div class="ui-modal-mask" id="delSong-mask" x-cloak x-show="$store.modals.delSong" x-transition:enter="is-entering" x-transition:leave="is-leaving" x-transition:leave-end="is-leaving-to"
          @keydown.escape.window="$store.modals.delSong = false"
          @click.self="$store.modals.delSong = false" style="display: none">
         <div class="ui-modal" role="dialog" aria-modal="true" aria-labelledby="delSong-title">
@@ -244,7 +244,7 @@
     </div>
 
     {# 6. 音质升级弹窗（UPG-04）：宽版，按 delSong 同款结构手写（宏宽度固定 480px） #}
-    <div class="ui-modal-mask" id="upgrade-mask" x-cloak x-show="$store.modals.upgrade"
+    <div class="ui-modal-mask" id="upgrade-mask" x-cloak x-show="$store.modals.upgrade" x-transition:enter="is-entering" x-transition:leave="is-leaving" x-transition:leave-end="is-leaving-to"
          @keydown.escape.window="$store.modals.upgrade = false"
          @click.self="$store.modals.upgrade = false" style="display: none">
         <div class="ui-modal hist-upmodal" role="dialog" aria-modal="true" aria-labelledby="upgrade-title">

@@ -33,7 +33,7 @@
 #}
 {% macro modal(id, title, body_html='', footer_html='') -%}
 <div class="ui-modal-mask" id="{{ id }}-mask" x-cloak
-     x-show="$store.modals.{{ id }}"
+     x-show="$store.modals.{{ id }}" x-transition:enter="is-entering" x-transition:leave="is-leaving" x-transition:leave-end="is-leaving-to"
      @keydown.escape.window="$store.modals.{{ id }} = false"
      @click.self="$store.modals.{{ id }} = false"
      style="display: none">

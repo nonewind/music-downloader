@@ -68,8 +68,9 @@
     .disc-cardmeta { font-size: 13px; color: var(--ui-text-2); }
     .disc-card .ui-btn { width: 100%; }
     /* 封面按钮：点开歌曲列表；非歌曲榜禁用（不可点、不变手型） */
-    .disc-coverbtn { display: block; width: 100%; padding: 0; border: 0; background: none; border-radius: var(--ui-r-m); cursor: pointer; transition: opacity .15s; }
+    .disc-coverbtn { display: block; width: 100%; padding: 0; border: 0; background: none; border-radius: var(--ui-r-m); cursor: pointer; transition: opacity .15s, transform .08s; }
     .disc-coverbtn:hover:not(:disabled) { opacity: .85; }
+    .disc-coverbtn:active:not(:disabled) { transform: scale(.97); }
     .disc-coverbtn:disabled { cursor: default; }
 
     /* 榜单/歌单详情弹窗：比默认弹窗宽，列表在弹窗内滚动 */
@@ -150,14 +151,14 @@
         </div>
 
         {# 歌曲 / 歌手模式：一行一首歌（歌手搜索后端同样返回单曲列表） #}
-        <div class="list-card fade-in" x-show="!searchIsAlbum && !searchLoading && search.items.length">
+        <div class="list-card ui-stagger" x-show="!searchIsAlbum && !searchLoading && search.items.length">
             <template x-for="(s, idx) in (searchIsAlbum ? [] : search.items)" :key="String(s.id) + ':' + idx">
                 {{ song_row('search.qualities') }}
             </template>
         </div>
 
         {# 专辑模式：一行一张专辑 #}
-        <div class="list-card fade-in" x-show="searchIsAlbum && !searchLoading && search.items.length">
+        <div class="list-card ui-stagger" x-show="searchIsAlbum && !searchLoading && search.items.length">
             <template x-for="(a, idx) in (searchIsAlbum ? search.items : [])" :key="String(a.id) + ':' + idx">
                 <div class="list-row">
                     <div class="list-main">
@@ -249,7 +250,7 @@
         </div>
         <div class="disc-loading" x-show="topLoading">加载中…</div>
         <div class="disc-loading" x-show="!topLoading && !toplists.length">暂无数据</div>
-        <div class="disc-cards" x-show="!topLoading && toplists.length">
+        <div class="disc-cards ui-stagger" x-show="!topLoading && toplists.length">
             <template x-for="t in toplists" :key="String(t.id)">
                 <div class="disc-card">
                     <button type="button" class="disc-coverbtn" :disabled="t.addable === false"
@@ -286,7 +287,7 @@
                 <i class="bi bi-chevron-down disc-caret" :class="{ open: hotOpen }"></i>
             </button>
         </div>
-        <div x-show="hotOpen" x-transition.opacity.duration.150ms>
+        <div class="ui-collapse" :class="{ 'is-open': hotOpen }"><div class="ui-collapse-in">
             <div class="disc-filterrow">
                 <label>分类
                     <select class="ui-select" @change="hotCat = $event.target.value; loadHot(1)">
@@ -306,7 +307,7 @@
 
             <div class="disc-loading" x-show="hotLoading">加载中…</div>
             <div class="disc-loading" x-show="!hotLoading && !hotItems.length">暂无数据</div>
-            <div class="disc-cards" x-show="!hotLoading && hotItems.length">
+            <div class="disc-cards ui-stagger" x-show="!hotLoading && hotItems.length">
                 <template x-for="p in hotItems" :key="String(p.id)">
                     <div class="disc-card">
                         <button type="button" class="disc-coverbtn"
@@ -343,7 +344,7 @@
             </ul>
             <p class="disc-pageinfo" x-show="hotPagerItems.length"
                x-text="'第 ' + hotPage + ' 页 / 共 ' + hotPages + ' 页'"></p>
-        </div>
+        </div></div>
     </div>
 
     {# 5. 添加歌单弹窗（ID/链接 + 平台 + 类型 + 默认前 N；default_playlist_limit 来自 /api/settings） #}
@@ -399,7 +400,7 @@
     </div>
     <div class="disc-dlist">
         <div class="disc-loading" style="padding: 16px 20px" x-show="detail.loading">加载中…</div>
-        <div class="list-card" x-show="!detail.loading && detail.items.length">
+        <div class="list-card ui-stagger" x-show="!detail.loading && detail.items.length">
             <template x-for="(s, idx) in detail.items" :key="String(s.id) + ':' + idx">
                 {{ song_row('detail.qualities') }}
             </template>

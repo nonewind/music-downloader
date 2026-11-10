@@ -59,7 +59,8 @@
     /* 高级：API 服务折叠头（整行可点；收起时去掉底边线） */
     .set-foldhead { width: 100%; background: none; border: 0; text-align: left; cursor: pointer; font-family: inherit; }
     .set-foldhead[aria-expanded="false"] { border-bottom: 0; }
-    .set-foldhead .set-foldicon { margin-left: auto; }
+    .set-foldhead .set-foldicon { margin-left: auto; transition: transform .2s ease; }
+    .set-foldhead .set-foldicon.is-open { transform: rotate(180deg); }
 
     /* API 服务子块 */
     .set-svc { padding: 14px 0; }
@@ -354,9 +355,10 @@
                     <div class="ui-card">
                         <button type="button" class="set-cardhead set-foldhead" @click="toggleApiFold()" :aria-expanded="apiOpen ? 'true' : 'false'">
                             <i class="bi bi-hdd-network"></i> 高级：API 服务
-                            <i class="bi set-foldicon" :class="apiOpen ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+                            <i class="bi bi-chevron-down set-foldicon" :class="{ 'is-open': apiOpen }"></i>
                         </button>
-                        <div class="set-body" x-show="apiOpen" x-cloak>
+                        <div class="ui-collapse" :class="{ 'is-open': apiOpen }"><div class="ui-collapse-in">
+                        <div class="set-body">
                             <div class="set-hint">三个平台的 API 服务由程序自动启动，一般不需要改动。端口修改后需重启程序才生效；默认端口被占用时会自动换一个空闲端口。</div>
                             <template x-for="svc in serviceList" :key="svc.key">
                                 <div class="set-svc">
@@ -384,7 +386,7 @@
                                     </div>
                                 </div>
                             </template>
-                        </div>
+                        </div></div></div>
                     </div>
                 </div>
 
