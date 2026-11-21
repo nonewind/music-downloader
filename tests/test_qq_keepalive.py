@@ -5,12 +5,13 @@
   login_type=2 分支依赖 access_token/refresh_token/expired_at）
 - merge_refreshed_cookie：musickey 换发写回 qqmusic_key/qm_keyst、psrf_*
   刷新字段更新、微信字段共存、无变化/缺 musickey 返回 None、其余字段保留
+- 扫码登录 Cookie（标准名）连续续期两次：第二次发出的是第一次换发的新凭证
 - TaskManager._qq_cookie_keepalive：成功续期写回账号 cookie；接口无返回
   （cookie 失效/缺刷新字段）不动账号
 """
 
 
-from core.providers.qq.client import QqClient, merge_refreshed_cookie
+from core.providers.qq.client import QqClient, _credential_to_cookie, merge_refreshed_cookie
 from models import Account, db
 import task_manager
 
@@ -107,6 +108,59 @@ def test_merge_returns_none_without_musickey():
     assert merge_refreshed_cookie(WEB_COOKIE, {"refresh_token": "x"}) is None
     assert merge_refreshed_cookie(WEB_COOKIE, {}) is None
     assert merge_refreshed_cookie(WEB_COOKIE, None) is None
+
+
+def test_scan_login_cookie_second_refresh_sends_new_credential():
+    """扫码登录 Cookie 用标准名：续期两次，第二次发出的是第一次换发的新值"""
+    scan_cookie = _credential_to_cookie({
+        "musicid": 10001, "musickey": "Q_H_L_key0",
+        "refresh_token": "RT_0", "refresh_key": "RK_0",
+        "access_token": "AT_0", "expired_at": 1799000000,
+        "encryptUin": "oivkoiC5oevq",
+    })
+    creds = [
+        {"musickey": "Q_H_L_key1", "refresh_token": "RT_1", "refresh_key": "RK_1",
+         "access_token": "AT_1", "expired_at": 1799100000},
+        {"musickey": "Q_H_L_key2", "refresh_token": "RT_2", "refresh_key": "RK_2",
+         "access_token": "AT_2", "expired_at": 1799200000},
+    ]
+    sent = []
+    cookie = scan_cookie
+    for cred in creds:
+        # 第一步：照保活任务的做法，用当前 Cookie 设置客户端，记下续期时发出的凭证
+        c = QqClient(cookie=cookie)
+        sent.append(dict(c.session.cookies.items()))
+        # 第二步：合并换发的新凭证，作为下次续期的 Cookie
+        cookie = merge_refreshed_cookie(cookie, cred)
+        assert cookie is not None
+
+    first, second = sent
+    assert first["refresh_token"] == "RT_0"
+    assert first["refresh_key"] == "RK_0"
+    # 第二次续期用的是第一次换发的整套凭证
+    assert second["musickey"] == "Q_H_L_key1"
+    assert second["refresh_token"] == "RT_1"
+    assert second["refresh_key"] == "RK_1"
+    assert second["access_token"] == "AT_1"
+    assert second["expired_at"] == "1799100000"
+    # 存回的 Cookie 不留旧值，也不多出网页 Cookie 的 psrf_* 字段
+    pairs = dict(p.split("=", 1) for p in cookie.split("; "))
+    assert pairs["refresh_token"] == "RT_2"
+    assert pairs["refresh_key"] == "RK_2"
+    assert pairs["musickey"] == "Q_H_L_key2"
+    assert "psrf_qqrefresh_token" not in pairs
+    assert pairs["euin"] == "oivkoiC5oevq"
+
+
+def test_merge_adds_refresh_key_to_web_cookie():
+    """网页 Cookie 原本没有 refresh_key：续期返回后写到标准名，下次续期带上"""
+    cred = dict(NEW_CRED)
+    cred["refresh_key"] = "RK_NEW"
+    merged = merge_refreshed_cookie(WEB_COOKIE, cred)
+    c = QqClient(cookie=merged)
+    got = dict(c.session.cookies.items())
+    assert got["refresh_key"] == "RK_NEW"
+    assert got["refresh_token"] == "RT_NEW"
 
 
 # ----------------------------------------------------------------------

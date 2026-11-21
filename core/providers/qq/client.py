@@ -1086,13 +1086,18 @@ def merge_refreshed_cookie(old_cookie: str, cred: dict) -> str | None:
 
     保活链路（TaskManager cookie_keepalive 定时任务）专用：调桥接服务
     GET /login/refresh_credential 换发新 musickey 后，把新值写回账号存储
-    的原始网页 Cookie 对应字段（保持原 Cookie 其余字段不动——部分字段如
-    ptcz/wxunionid 与登录态相关，不能丢）：
-        musickey -> qqmusic_key + qm_keyst + psrf_musickey_createtime 附带
-            musickeyCreateTime 时一并更新
-        refresh_token -> psrf_qqrefresh_token + wxrefresh_token（微信共存）
-        access_token  -> psrf_qqaccess_token
-        expired_at    -> psrf_access_token_expiresAt
+    的原始 Cookie 对应字段（保持原 Cookie 其余字段不动——部分字段如
+    ptcz/wxunionid 与登录态相关，不能丢）。每个凭证字段写回 set_cookie
+    下次会读到的名字：原 Cookie 里已有的名字（标准名或别名）全部更新，
+    一个都没有时写标准名：
+        musickey      -> musickey / qqmusic_key / qm_keyst
+        refresh_token -> refresh_token / wxrefresh_token / psrf_qqrefresh_token
+        access_token  -> access_token / psrf_qqaccess_token
+        expired_at    -> expired_at / psrf_access_token_expiresAt
+        refresh_key   -> refresh_key
+        musickeyCreateTime -> psrf_musickey_createtime
+    扫码登录 Cookie 用标准名，网页 Cookie 用 psrf_* 别名，两种形态续期
+    后下次读到的都是新值。
 
     Returns:
         合并后的新 Cookie 串；无有效新值（缺 musickey）或与原值完全一致
@@ -1120,37 +1125,37 @@ def merge_refreshed_cookie(old_cookie: str, cred: dict) -> str | None:
 
     changed = False
 
-    def put(name: str, value: str, only_if_exists: bool = False) -> None:
-        """写字段；only_if_exists=True 时仅原 Cookie 已有该字段才更新
-        （不给 QQ cookie 添加微信字段之类的无意义新增，避免"未换发也判变"）"""
+    def put(name: str, value: str) -> None:
+        """写字段；新值为空或与原值相同不算变化"""
         nonlocal changed
         if not value:
-            return
-        if only_if_exists and name not in pairs:
             return
         if pairs.get(name) != value:
             pairs[name] = value
             changed = True
 
-    # musickey 载体（网页/扫码两种 Cookie 形态都写，set_cookie 均可解析）
-    put("qqmusic_key", new_key)
-    put("qm_keyst", new_key)
-    # 刷新字段：优先更新网页 Cookie 的 psrf_*；字段不存在则落标准名
-    # （set_cookie 与桥接服务都认标准名）；wxrefresh_token 仅微信 Cookie
-    # 原有该字段时同步
-    refresh_token = pick("refresh_token")
-    put("psrf_qqrefresh_token", refresh_token)
-    put("wxrefresh_token", refresh_token, only_if_exists=True)
-    if "psrf_qqrefresh_token" not in pairs:
-        put("refresh_token", refresh_token)
-    access_token = pick("access_token")
-    put("psrf_qqaccess_token", access_token)
-    if "psrf_qqaccess_token" not in pairs:
-        put("access_token", access_token)
-    expired_at = pick("expired_at")
-    put("psrf_access_token_expiresAt", expired_at)
-    if "psrf_access_token_expiresAt" not in pairs:
-        put("expired_at", expired_at)
+    # 每组第一个是标准名，其余是网页/微信 Cookie 的别名（与 set_cookie
+    # 的读取名一致）
+    field_names = (
+        ("musickey", "qqmusic_key", "qm_keyst"),
+        ("refresh_token", "wxrefresh_token", "psrf_qqrefresh_token"),
+        ("access_token", "psrf_qqaccess_token"),
+        ("expired_at", "psrf_access_token_expiresAt"),
+        ("refresh_key",),
+    )
+    for names in field_names:
+        standard_name = names[0]
+        value = pick(standard_name)
+        # 第一步：原 Cookie 里已有的名字全部更新，不留旧值
+        found_any = False
+        for name in names:
+            if name in pairs:
+                put(name, value)
+                found_any = True
+        # 第二步：一个都没有时写标准名（set_cookie 与桥接服务都认）
+        if not found_any:
+            put(standard_name, value)
+
     create_time = pick("musickeyCreateTime", "musickey_create_time")
     put("psrf_musickey_createtime", create_time)
     if not changed:
