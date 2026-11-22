@@ -32,6 +32,7 @@ import weakref
 import requests
 
 from . import bridge
+from .._bridge_base import ApiProgramError
 from ._transform import fix_cover_url, map_fee
 
 logger = logging.getLogger(__name__)
@@ -404,13 +405,26 @@ class KuGouClient:
         url = f"{self.base_url}/register/dev"
         try:
             resp = self.session.get(url, timeout=15)
+        except requests.RequestException as e:
+            raise self._bridge.problem("unreachable", f"请求 /register/dev 失败（{e}）") from e
+        try:
             data = resp.json()
-        except (requests.RequestException, ValueError) as e:
-            raise RuntimeError(f"酷狗API设备注册失败: {e}") from e
-        dfid = (data.get("data") or {}).get("dfid")
-        if not dfid:
-            raise RuntimeError("酷狗API设备注册失败（响应无 dfid）")
-        return str(dfid)
+        except ValueError as e:
+            raise self._bridge.problem(
+                "bad_response", f"/register/dev 返回的不是 JSON（HTTP {resp.status_code}）") from e
+        if not isinstance(data, dict):
+            raise self._bridge.problem(
+                "bad_response", f"/register/dev 返回的不是 JSON 对象：{resp.text[:200]}")
+        # 接口程序访问平台出错：JS 异常对象在 msg 里（同 _request 第 3 步）
+        msg = data.get("msg")
+        if isinstance(msg, dict) and "stack" in msg:
+            raise self._bridge.problem(
+                "bad_response", f"/register/dev 访问平台出错（{msg.get('message')}）")
+        inner = data.get("data")
+        if not isinstance(inner, dict) or not inner.get("dfid"):
+            raise self._bridge.problem(
+                "bad_response", f"/register/dev 没有返回 dfid：{resp.text[:200]}")
+        return str(inner["dfid"])
 
     def _ensure_dfid(self) -> str:
         """获取 dfid（按 base_url 分桶缓存，miss 时注册）"""
@@ -459,11 +473,17 @@ class KuGouClient:
         - bust_cache：取流类请求追加随机 timestamp 参数，绕过服务端
           2 分钟响应缓存（CDN 链接带时间戳目录，缓存复用可能已失效）
 
-        连接失败抛 RuntimeError（中文提示，供上层捕获展示）；
-        其他失败记日志返回 {}。
+        接口程序的回应只在这里检查一次：
+        - 连不上 / 没响应：重试后抛 ApiProgramError(unreachable)
+        - 不是 JSON 或不是对象：直接抛 ApiProgramError(bad_response)
+          （路由不存在时 Express 返回 HTML 404，说明接口程序版本对不上）
+        - 接口程序访问平台出错（body 为 {"status":0,"msg":{name,message,stack}}，
+          2026-11-22 本地实测）：直接抛 ApiProgramError(bad_response)
+        - 其余为平台业务结果，原样返回 body
         """
         if path not in _ALLOWED_ROUTES:
             raise ValueError(f"酷狗API接口不在白名单，禁止调用: {path}")
+        last_detail = ""
         # url 在循环内每次重新解析：停止→重启后端口漂移时，
         # 正在重试的请求也能经 base_url 属性取到新地址
         for attempt in range(1, retries + 1):
@@ -471,7 +491,7 @@ class KuGouClient:
             p = dict(params or {})
             try:
                 p["cookie"] = self._build_cookie()
-            except RuntimeError:
+            except ApiProgramError:
                 # dfid 注册失败（服务未就绪等）：重试或抛出
                 if attempt < retries:
                     time.sleep(1.5 * attempt)
@@ -479,50 +499,45 @@ class KuGouClient:
                 raise
             if bust_cache:
                 p["timestamp"] = int(time.time() * 1000) + attempt
+            # 第 1 步：发请求；瞬时断连（API 子进程重启/端口漂移/网络抖动）走重试，
+            # 不得被上层判为鉴权失败而换号（一次抖动放大成 N 次无效请求）
             try:
                 resp = self.session.get(url, params=p, timeout=timeout)
-                try:
-                    data = resp.json()
-                except ValueError:
-                    logger.warning("请求 %s 第 %d 次返回非 JSON（HTTP %s）",
-                                   path, attempt, resp.status_code)
-                    if attempt < retries:
-                        time.sleep(1.5 * attempt)
-                        continue
-                    return {}
-                # 返回点单点归一为 dict：resp.json() 合法但可能为数组/字符串，
-                # 下游 data.get(...) 会抛 AttributeError（(x or {}) 兜不住非空非 dict）
-                if not isinstance(data, dict):
-                    logger.warning("请求 %s 返回非对象 JSON: %s",
-                                   path, type(data).__name__)
-                    data = {}
-                # dfid 失效：废弃后重试（下轮 _build_cookie 会重新注册）
-                if data.get("error_code") == _DFID_STALE_CODE:
-                    logger.info("dfid 失效(152)，重新注册: %s", path)
-                    self._invalidate_dfid()
-                    if attempt < retries:
-                        continue
-                    return data
-                return data
-            except requests.exceptions.ConnectionError as e:
-                # 瞬时断连（API 子进程重启/端口漂移/网络抖动）走重试路径。
-                # 原实现直接抛 RuntimeError 会被上层判为「接口/鉴权级失败」
-                # 触发换号，而换号对网络抖动毫无意义（一次抖动放大成 N 次无效请求）
+            except requests.RequestException as e:
+                last_detail = f"请求 {path} 失败（{e}）"
                 logger.warning("连接酷狗API失败 %s 第 %d/%d 次: %s",
                                path, attempt, retries, e)
                 if attempt < retries:
                     time.sleep(1.5 * attempt)
-                    continue
-                raise RuntimeError(
-                    f"无法连接酷狗音乐API服务（{self.base_url}），"
-                    f"请检查服务是否运行或地址配置是否正确: {e}"
-                ) from e
-            except requests.RequestException as e:
-                logger.warning("请求 %s 第 %d 次失败: %s", path, attempt, e)
+                continue
+            # 第 2 步：检查返回结构（JSON 对象）
+            try:
+                data = resp.json()
+            except ValueError:
+                if resp.status_code == 404:
+                    raise self._bridge.problem(
+                        "bad_response", f"接口程序没有 {path} 这个接口（HTTP 404）")
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 返回的不是 JSON（HTTP {resp.status_code}）")
+            if not isinstance(data, dict):
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 返回的不是 JSON 对象：{resp.text[:200]}")
+            # 第 3 步：接口程序自己访问平台出错（JS 异常对象原样塞在 msg 里，
+            # 带 name/message/stack；实测有 AxiosError 与 DNS 失败的 Error 两种）
+            msg = data.get("msg")
+            if isinstance(msg, dict) and "stack" in msg:
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 访问平台出错（{msg.get('message')}）")
+            # 第 4 步：dfid 失效：废弃后重试（下轮 _build_cookie 会重新注册）
+            if data.get("error_code") == _DFID_STALE_CODE:
+                logger.info("dfid 失效(152)，重新注册: %s", path)
+                self._invalidate_dfid()
                 if attempt < retries:
-                    time.sleep(1.5 * attempt)
+                    continue
+                return data
+            return data
         logger.error("请求 %s 失败，已重试 %d 次", path, retries)
-        return {}
+        raise self._bridge.problem("unreachable", f"{last_detail}，已重试 {retries} 次")
 
     # ------------------------------------------------------------------
     # 歌曲条目归一化（三种响应形态 → 统一结构）

@@ -32,6 +32,11 @@ _BINARIES = {
 class QqApiBridge(ApiBridge):
     BINARIES = _BINARIES
     LABEL = "QQ音乐API"
+    NAME = "QQ音乐"
+    # 没有专门的版本接口；FastAPI 自带的 /openapi.json 里 info.version 是服务版本
+    # （2026-11-22 本地实测为 0.7.2-dev.2）
+    VERSION_PATH = "/openapi.json"
+    VERSION_KEYS = ("info", "version")
     MISSING_BINARY_MSG = (
         "未找到QQ音乐API二进制: {path}\n"
         "请将 qqmusic-api 对应平台版本放到 api/ 目录"

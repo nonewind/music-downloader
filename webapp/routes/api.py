@@ -50,6 +50,7 @@ from flask import Blueprint, current_app, jsonify, request, Response
 from sqlalchemy import func
 
 from models import Account, Playlist, Setting, Song, DownloadTask, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
+from core.providers._bridge_base import ApiProgramError
 from core.providers.base import MusicProvider
 from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
                     is_trusted_request, set_token_cookie, token_from_env)
@@ -1602,6 +1603,9 @@ def test_account_login(aid: int):
             "msg": msg,
             "data": acc.to_dict(monthly_downloaded=_monthly_downloaded(acc.id)),
         })
+    except ApiProgramError as e:
+        # 接口程序问题：原因自带「接口程序连不上/返回异常」，与 Cookie 无效区分
+        return jsonify({"code": 1, "msg": str(e)})
     except Exception as e:
         return jsonify({"code": 1,
                         "msg": f"连接{PLATFORM_NAMES.get(acc.platform, acc.platform)}API服务失败: {e}"})

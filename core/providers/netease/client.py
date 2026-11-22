@@ -163,27 +163,65 @@ class NeteaseClient:
         retries: int = 3,
         timeout: int = 15,
     ) -> dict:
-        """调用 NeteaseCloudMusicApi 接口"""
+        """调用 NeteaseCloudMusicApi 接口，返回 body（dict）
+
+        接口程序的回应只在这里检查一次，之后的调用点信任 body 结构：
+        - 连不上 / 没响应：重试后抛 ApiProgramError(unreachable)
+        - HTTP 5xx（接口程序报错，含它连不上平台的 502）：重试后抛
+          ApiProgramError(bad_response)
+        - 不是 JSON 或不是对象：直接抛 ApiProgramError(bad_response)
+          （路由不存在时 Express 返回 HTML 404，说明接口程序版本对不上）
+        - 其余（含 4xx，code 为平台给出的业务码，如 301 需要登录）原样返回；
+          body 一般带 code，/login/status 例外（code 在 data 里）
+        """
+        last_kind = ""
+        last_detail = ""
         # url 在循环内每次重新解析：停止→重启后端口漂移时，
         # 正在重试的请求也能经 base_url 属性取到新地址
         for attempt in range(1, retries + 1):
             url = f"{self.base_url}{path}"
+            # 第 1 步：发请求；连不上就重试
             try:
                 if method.upper() == "GET":
                     resp = self.session.get(url, params=params, timeout=timeout)
                 else:
                     resp = self.session.post(url, params=params, data=data, timeout=timeout)
-                resp.raise_for_status()
-                # 返回点单点归一为 dict：上游改写成数组/字符串时调用点
-                # (body or {}).get(...) 兜不住（[] or {} 得 []），list 无 .get
-                body = resp.json()
-                return body if isinstance(body, dict) else {}
-            except (requests.RequestException, ValueError) as e:
+            except requests.RequestException as e:
+                last_kind = "unreachable"
+                last_detail = f"请求 {path} 失败（{e}）"
                 logger.warning("请求 %s 第 %d 次失败: %s", path, attempt, e)
                 if attempt < retries:
                     time.sleep(1.5 * attempt)
+                continue
+            # 第 2 步：HTTP 5xx 是接口程序报错；重试
+            if resp.status_code >= 500:
+                last_kind = "bad_response"
+                last_detail = f"{path} 返回 HTTP {resp.status_code}：{resp.text[:200]}"
+                logger.warning("请求 %s 第 %d 次失败: HTTP %d", path, attempt, resp.status_code)
+                if attempt < retries:
+                    time.sleep(1.5 * attempt)
+                continue
+            # 第 3 步：检查返回结构（JSON 对象）
+            try:
+                body = resp.json()
+            except ValueError:
+                if resp.status_code == 404:
+                    raise self._bridge.problem(
+                        "bad_response", f"接口程序没有 {path} 这个接口（HTTP 404）")
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 返回的不是 JSON（HTTP {resp.status_code}）")
+            if not isinstance(body, dict):
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 返回的不是 JSON 对象：{resp.text[:200]}")
+            # 接口程序没拿到平台回应时的固定兜底体（2026-11-22 本地断网实测
+            # /song/url/v1：HTTP 404 + {"code":404,"data":null,"msg":"Not Found"}，
+            # 日志为 status: undefined）；平台自身的业务码不会是这个组合
+            if resp.status_code == 404 and body == {"code": 404, "data": None, "msg": "Not Found"}:
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 没拿到平台的回应（HTTP 404 Not Found）")
+            return body
         logger.error("请求 %s 失败，已重试 %d 次", path, retries)
-        return {"code": -1, "msg": "request failed"}
+        raise self._bridge.problem(last_kind, f"{last_detail}，已重试 {retries} 次")
 
     # ------------------------------------------------------------------
     # 扫码登录
@@ -287,28 +325,17 @@ class NeteaseClient:
         # （_request 用 session.get/post 发送，无 header 即匿名校验、profile
         # 必空），故 set_cookie 必须在校验之前、顺序不可调整。
         self.set_cookie(cookie)
-        inner: dict = {}
-        # _request 已把 RequestException/ValueError 吞成 {"code": -1}，网络抖动
-        # 与 API 服务重启都表现为 code==-1；此处对网络瞬态重试一次，避免被
-        # code != 200 误判为「MUSIC_U 无效」而误导用户重新扫码
-        for _try in range(2):
-            verify = self._request("/login/status",
-                                   params={"timestamp": int(time.time() * 1000)},
-                                   timeout=5, retries=1)
-            if isinstance(verify, dict) and isinstance(verify.get("data"), dict):
-                inner = verify.get("data")
-            elif isinstance(verify, dict):
-                inner = verify
-            else:
-                inner = {}
-            if inner.get("code") != -1:
-                break
-        profile = inner.get("profile") if isinstance(inner, dict) else None
-        if inner.get("code") == -1:
-            # 网络瞬态而非凭证无效：提示重试，不误导重新扫码。
-            # （ok=false 时路由 ncm_qr_check 拦截，cookie 不会透传给前端）
-            return {"ok": False, "status": 4, "cookie": "",
-                    "msg": "登录态校验网络异常，请检查 API 服务后点击重试"}
+        # 接口程序连不上/报错时 _request 直接抛 ApiProgramError（路由层展示原因），
+        # 不会被误判为「MUSIC_U 无效」
+        verify = self._request("/login/status",
+                               params={"timestamp": int(time.time() * 1000)},
+                               timeout=5, retries=1)
+        # /login/status 的 code/profile 在 data 里
+        if isinstance(verify.get("data"), dict):
+            inner = verify["data"]
+        else:
+            inner = verify
+        profile = inner.get("profile")
         if inner.get("code") != 200 or not isinstance(profile, dict) or not profile:
             return {"ok": False, "status": 4, "cookie": cookie,
                     "msg": "扫码成功但登录态未生效（MUSIC_U 无效），请重新扫码或改用手动填入"}
@@ -542,8 +569,13 @@ class NeteaseClient:
         if result.get("code") != 200:
             msg = result.get("msg") or result.get("message") or ""
             # 接口整体失败：返回带 err 诊断的占位结构（与 song_ids 等长），
-            # 不再吞成空列表——否则上层把接口失败伪装成"无版权或需VIP"
+            # 不再吞成空列表——否则上层把接口失败伪装成"无版权或需VIP"。
+            # 301 是网易云「需要登录」：账号问题，写明以便和接口程序问题区分
             logger.error("获取歌曲下载链接失败: code=%s msg=%s", result.get("code"), msg)
+            if result.get("code") == 301:
+                err = f"账号登录失效（网易云返回 301 {msg}）"
+            else:
+                err = f"api:{result.get('code')}:{msg}"
             return [
                 {
                     "id": sid,
@@ -552,15 +584,15 @@ class NeteaseClient:
                     "size": None,
                     "freeTrialInfo": None,
                     "code": result.get("code"),
-                    "err": f"api:{result.get('code')}:{msg}",
+                    "err": err,
                 }
                 for sid in song_ids
             ]
-        data = result.get("data") or []
+        data = result.get("data")
         if not isinstance(data, list):
-            # 防御：服务版本差异导致 data 非数组时退回空列表（同"缺项"语义）
-            logger.warning("歌曲下载链接响应 data 非数组: %s", type(data).__name__)
-            return []
+            # 成功响应的 data 必须是数组；不是说明接口程序/平台改了返回格式
+            raise self._bridge.problem(
+                "bad_response", f"/song/url/v1 的 data 不是数组（{type(data).__name__}）")
         if level in _HI_LEVELS:
             self._fill_hi_level_urls(data, lv)
         return data

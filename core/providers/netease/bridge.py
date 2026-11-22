@@ -25,6 +25,10 @@ _BINARIES = {
 class NodeBridge(ApiBridge):
     BINARIES = _BINARIES
     LABEL = "API "
+    NAME = "网易云"
+    # 2026-11-22 本地实测：GET /inner/version → {"code":200,"data":{"version":"4.40.1"}}
+    VERSION_PATH = "/inner/version"
+    VERSION_KEYS = ("data", "version")
     MISSING_BINARY_MSG = (
         "未找到 API 二进制: {path}\n"
         "请从官方 Release 下载对应平台版本放到 source/api/ 目录"
