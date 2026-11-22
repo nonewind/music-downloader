@@ -587,7 +587,8 @@ function discoverPage() {
         },
 
         // ============================================================
-        // 添加歌单弹窗（ID/链接 + 平台 + 类型 + 默认前 N）
+        // 用链接添加弹窗（链接/歌单 ID + 平台 + 类型 + 默认前 N）
+        // POST /api/link：单曲、专辑链接直接下载，歌单链接和纯数字 ID 走关注
         // ============================================================
         openAdd() {
             this.addForm = {
@@ -599,11 +600,16 @@ function discoverPage() {
 
         async confirmAdd() {
             const f = this.addForm;
-            if (!(f.source || "").trim()) { showToast("请输入歌单 ID 或链接"); return; }
+            if (!(f.source || "").trim()) { showToast("请粘贴链接或输入歌单 ID"); return; }
             const limit = parseInt(f.limit) || this.defaultLimit;
             this.addBusy = true;
             try {
-                const data = await this.addPlaylist(f.source.trim(), f.type, limit, f.platform);
+                // 短链要逐跳打开、整张专辑要先拉曲目，比普通请求慢，放宽超时
+                const data = await api("/api/link", {
+                    method: "POST",
+                    body: JSON.stringify({ source: f.source.trim(), type: f.type, limit, platform: f.platform }),
+                    timeout: 30000,
+                });
                 showToast(data.msg, "添加成功");
                 this.$store.modals.addPl = false;
                 this.loadMyPlaylists();     // 新歌单可能就是发现卡片里的榜单

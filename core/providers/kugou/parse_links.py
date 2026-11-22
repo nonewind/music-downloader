@@ -1,8 +1,9 @@
 """酷狗音乐链接解析模块
 
-包含两类解析（平台分流在 api.py 层完成）：
+包含三类解析（平台分流在 api.py 层完成）：
 - parse_kugou_playlist_id：榜单 rankid / PC 歌单链接 / 纯数字（原有能力不变）
 - parse_kugou_share：App 分享短链 / zlist 长链 → gcid → 整型歌单 id
+- parse_kugou_link：认出链接是单曲、专辑还是歌单
   （2026-09-30 探针实测：t1.kugou.com 短链 30x Location 直接携带
   global_collection_id 参数；PC 网页版 special/single 页内嵌精确 gcid；
   collect 类分享无 specialid，唯一稳定标识是 gcid 字符串）
@@ -176,3 +177,56 @@ def parse_kugou_share(text: str, expand=None) -> dict | None:
     if pid is None:
         return None
     return {"id": pid, "gcid": gcid}
+
+
+# ----------------------------------------------------------------------
+# 认链接类型（parse_kugou_link）
+# ----------------------------------------------------------------------
+# 单曲：链接里直接带 album_audio_id（/krm/audio 与取流用的歌曲 ID）
+_SONG_RES = (
+    re.compile(r"[?&]album_audio_id=(\d+)"),
+    re.compile(r"[?&]mixsongid=(\d+)"),
+)
+# 专辑：www.kugou.com/album/123.html、/album/info/123、/yy/album/single/123.html
+_ALBUM_RE = re.compile(r"/album/(?:info/|single/)?(\d+)")
+# 歌单：gcid 参数 / PC 歌单页 / 榜单 rankid
+_PLAYLIST_GCID_RE = re.compile(r"[?&]global_collection_id=([0-9a-z_]+)")
+_PLAYLIST_RES = (
+    re.compile(r"/special/single/(\d+)"),
+    re.compile(r"rankid[=/](\d+)"),
+)
+
+
+def parse_kugou_link(url: str) -> tuple[str, str] | None:
+    """认出酷狗链接的类型和 ID
+
+    支持以下格式：
+        - 单曲：带 album_audio_id= 或 mixsongid= 参数的链接
+        - 专辑：/album/<id>.html、/album/info/<id>、/yy/album/single/<id>.html
+        - 歌单：带 global_collection_id= 参数、/special/single/<id>.html、rankid
+
+    短链（t1.kugou.com）本身认不出，由 api.py 跟随跳转后再调本函数。
+    mixsong/<编码>.html 和 song/#hash= 形态里没有 album_audio_id，认不出。
+
+    Returns:
+        ("song" | "album" | "playlist", ID 字符串：单曲 album_audio_id /
+        专辑 album_id / 歌单 gcid、specialid 或 rankid)；认不出返回 None
+    """
+    # 第一步：单曲
+    for pattern in _SONG_RES:
+        m = pattern.search(url)
+        if m:
+            return "song", m.group(1)
+    # 第二步：专辑
+    m = _ALBUM_RE.search(url)
+    if m:
+        return "album", m.group(1)
+    # 第三步：歌单
+    m = _PLAYLIST_GCID_RE.search(url)
+    if m:
+        return "playlist", m.group(1)
+    for pattern in _PLAYLIST_RES:
+        m = pattern.search(url)
+        if m:
+            return "playlist", m.group(1)
+    return None

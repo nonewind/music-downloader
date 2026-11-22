@@ -347,12 +347,12 @@
         </div></div>
     </div>
 
-    {# 5. 添加歌单弹窗（ID/链接 + 平台 + 类型 + 默认前 N；default_playlist_limit 来自 /api/settings） #}
+    {# 5. 用链接添加弹窗（链接/歌单 ID + 平台 + 类型 + 默认前 N；default_playlist_limit 来自 /api/settings） #}
     {% set add_body %}
-    <label class="disc-label">歌单 ID 或分享链接
-        <input type="text" class="ui-input" x-model="addForm.source" placeholder="粘贴歌单链接或输入 ID">
+    <label class="disc-label">链接或歌单 ID
+        <input type="text" class="ui-input" x-model="addForm.source" placeholder="粘贴单曲、专辑、歌单链接或输入歌单 ID">
     </label>
-    <div class="disc-formhint">支持格式：纯数字 ID、分享链接、短链接</div>
+    <div class="disc-formhint">单曲、专辑直接下载，歌单加入关注；有链接时平台自动识别</div>
     <label class="disc-label">平台
         <select class="ui-select" @change="addForm.platform = $event.target.value">
             <template x-for="p in platforms" :key="p.key">
@@ -374,7 +374,7 @@
     {{ ui.btn('取消', 'secondary', attrs={'@click': '$store.modals.addPl = false'}) }}
     {{ ui.btn('添加', 'primary', attrs={':disabled': 'addBusy', ':class': "{ 'is-loading': addBusy }", '@click': 'confirmAdd()'}) }}
     {% endset %}
-    {{ ui.modal('addPl', '添加歌单', add_body, add_footer) }}
+    {{ ui.modal('addPl', '用链接添加', add_body, add_footer) }}
 
     {# 6. 榜单/歌单详情弹窗：顶部信息 + 关注；下面是歌曲列表（行与搜索结果同一个宏） #}
     {% set detail_body %}

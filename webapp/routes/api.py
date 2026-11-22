@@ -3,6 +3,7 @@
 接口列表（仅列常用主路径；完整路由见本文件 @api_bp.route 定义）：
 - GET    /api/playlists           获取关注的歌单列表
 - POST   /api/playlists           添加歌单（支持分享链接自动解析 ID）
+- POST   /api/link                用链接添加：单曲/专辑直接下载，歌单走关注（支持分享短链）
 - PUT    /api/playlists/<pid>     更新歌单设置（启用/limit）
 - DELETE /api/playlists/<pid>     取消关注
 - POST   /api/sync/<pid>          立即同步某歌单
@@ -45,6 +46,9 @@ import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 import json as _json
+from urllib.parse import urljoin, urlparse
+
+import requests
 
 from flask import Blueprint, current_app, jsonify, request, Response
 from sqlalchemy import func
@@ -65,11 +69,11 @@ from task_manager import (
     _month_start,
     find_upgrade_candidates,
 )
-from core.providers.netease.parse_links import parse_playlist_id
+from core.providers.netease.parse_links import parse_netease_link, parse_playlist_id
 from core.providers.kugou import bridge as kugou_bridge
 from core.providers.kugou.client import register_gcid
-from core.providers.kugou.parse_links import parse_kugou_playlist_id, parse_kugou_share
-from core.providers.qq.parse_links import parse_qq_playlist_id
+from core.providers.kugou.parse_links import parse_kugou_link, parse_kugou_playlist_id, parse_kugou_share
+from core.providers.qq.parse_links import parse_qq_link, parse_qq_playlist_id
 from core.providers import get_provider
 from core.providers.netease import bridge
 from core.providers.qq import bridge as qq_bridge
@@ -290,7 +294,14 @@ def add_playlist():
 
     if not source:
         return jsonify({"code": 1, "msg": "请输入歌单 ID 或链接"})
+    return _add_playlist(source, pl_type, limit, platform)
 
+
+def _add_playlist(source: str, pl_type: str, limit: int, platform: str):
+    """按平台解析歌单 ID 并关注（添加歌单与 /api/link 的歌单链接共用）
+
+    source 为歌单 ID 或链接原文（已 strip、非空），platform 已过白名单。
+    """
     # 链接解析按平台分流（QQ disstid / 酷狗 rankid 与网易云 ID 均为纯数字，可共用 int 主键）
     if platform == "qq":
         pid = parse_qq_playlist_id(source)
@@ -363,6 +374,156 @@ def add_playlist():
     db.session.commit()
     logger.info("添加歌单: %s (id=%s)", name, pid)
     return jsonify({"code": 0, "data": pl.to_dict(), "msg": f"已添加: {name}"})
+
+
+# ======================================================================
+# 用链接添加：单曲 / 专辑直接下载，歌单走关注
+# ======================================================================
+# 与酷狗短链展开同一个 UA（parse_links._SHARE_UA，2026-09-30 实测可用）
+_LINK_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+_LINK_MAX_HOPS = 5
+
+
+def _link_platform(url: str) -> str | None:
+    """按链接域名认平台；不是三个平台的域名返回 None
+
+    逐跳跟随短链时每一跳都用本函数校验（只访问本平台域名）。
+    """
+    host = (urlparse(url).hostname or "").lower()
+    if host == "163cn.tv" or host == "163.com" or host.endswith(".163.com"):
+        return "netease"
+    elif host == "qq.com" or host.endswith(".qq.com"):
+        return "qq"
+    elif host == "kugou.com" or host.endswith(".kugou.com"):
+        return "kugou"
+    else:
+        return None
+
+
+def _parse_link(platform: str, url: str) -> tuple[str, str] | None:
+    """按平台认链接类型：("song" | "album" | "playlist", ID)，认不出返回 None"""
+    if platform == "netease":
+        return parse_netease_link(url)
+    elif platform == "qq":
+        return parse_qq_link(url)
+    else:
+        return parse_kugou_link(url)
+
+
+def _follow_link(url: str, platform: str) -> tuple[str, str, str] | None:
+    """跟随短链跳转，直到某一跳认得出类型
+
+    手动逐跳（不自动跟随）：每一跳先校验仍是本平台域名，再看认不认得出；
+    认得出就停，不再往下请求（酷狗歌单短链的第一跳就带 gcid 参数）。
+    网络异常向上抛，由路由报给用户。
+
+    Returns:
+        (类型, ID, 认出时的链接)；跳到别的域名 / 不再跳转 / 超过跳数 → None
+    """
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update({"User-Agent": _LINK_UA})
+    current = url
+    for _ in range(_LINK_MAX_HOPS):
+        # 第一步：请求当前这一跳，拿跳转目标
+        resp = session.get(current, allow_redirects=False, timeout=8)
+        location = resp.headers.get("Location")
+        if not (300 <= resp.status_code < 400) or not location:
+            return None
+        next_url = urljoin(current, location)
+        # 第二步：跳到别的域名就停（只访问本平台域名）
+        if _link_platform(next_url) != platform:
+            logger.info("短链跳到了别的域名，已停止: %s → %s", url, next_url)
+            return None
+        # 第三步：认得出就停
+        found = _parse_link(platform, next_url)
+        if found:
+            kind, item_id = found
+            return kind, item_id, next_url
+        current = next_url
+    return None
+
+
+@api_bp.route("/link", methods=["POST"])
+def add_by_link():
+    """用链接添加：单曲 / 专辑链接直接下载，歌单链接走关注
+
+    请求体：
+        {"source": 链接或分享文案或歌单 ID,
+         "platform": 纯数字 ID 时用的平台（有链接时按域名认平台）,
+         "type": "official" / "user", "limit": 100}（type/limit 只对歌单有效）
+    返回：{"code":0, "msg":"..."}（歌单链接的返回与 POST /api/playlists 相同）
+    """
+    data = _json_body()
+    source = str(data.get("source") or "").strip()
+    pl_type = data.get("type", "user")
+    limit = _safe_int(data.get("limit", 100), 100, lo=1, hi=9999)
+    platform = (data.get("platform") or "").strip().lower() or "netease"
+    if platform not in PLATFORMS:
+        return jsonify({"code": 1, "msg": f"不支持的平台: {platform}，可选: {PLATFORM_NAMES}"}), 400
+    if not source:
+        return jsonify({"code": 1, "msg": "请粘贴链接或输入歌单 ID"})
+
+    # 第一步：取文字里的第一个链接；没有链接（纯 ID）按所选平台当歌单
+    m = re.search(r"https?://[^\s\"'<>]+", source)
+    if not m:
+        return _add_playlist(source, pl_type, limit, platform)
+    url = m.group(0)
+
+    # 第二步：按域名认平台（链接的平台优先于下拉框）
+    platform = _link_platform(url)
+    if platform is None:
+        return jsonify({"code": 1, "msg": "认不出这个链接，支持网易云、QQ音乐、酷狗的链接"})
+
+    # 第三步：认链接类型；认不出就当短链跟随跳转再认
+    found = _parse_link(platform, url)
+    if found:
+        kind, item_id = found
+        link = url
+    else:
+        try:
+            followed = _follow_link(url, platform)
+        except requests.RequestException as e:
+            return jsonify({"code": 1, "msg": f"短链打开失败: {e}"})
+        if followed:
+            kind, item_id, link = followed
+        else:
+            # 都认不出：按原来的歌单解析走（保留原有能识别的歌单写法）
+            kind, item_id, link = "playlist", "", source
+    logger.info("用链接添加: 平台 %s 类型 %s ID %s", platform, kind, item_id)
+
+    # 第四步：按类型交给已有的路径
+    if kind == "playlist":
+        return _add_playlist(link, pl_type, limit, platform)
+
+    tm = _get_task_manager()
+    if kind == "album":
+        try:
+            result = tm.download_album(item_id, "", platform=platform)
+        except ValueError as e:
+            return jsonify({"code": 1, "msg": str(e)})
+        if result["total"] == 0:
+            return jsonify({"code": 1, "msg": "没拿到这张专辑的歌曲，请检查链接或账号"})
+        msg = (f"专辑共 {result['total']} 首：入队 {result['enqueued']}，排除 {result['excluded']}，"
+               f"跳过(已下载/进行中/曾失败) {result['skipped']}")
+        return jsonify({"code": 0, "msg": msg})
+
+    # 单曲：先取歌名歌手（任务记录与下载页展示用），取不到就是链接或接口有问题
+    try:
+        details = _get_client(platform).get_song_detail([item_id])
+    except Exception as e:
+        return jsonify({"code": 1, "msg": f"获取歌曲信息失败: {e}"})
+    meta = details[0]
+    if not meta["title"]:
+        return jsonify({"code": 1, "msg": "没找到这首歌，请检查链接"})
+    # fee 未知按 VIP 传（与音质升级同一约定：VIP 账号能下免费歌，反之不行）
+    ok = tm.download_single_song(item_id, meta["title"], meta["artist"], 1, platform=platform)
+    if not ok:
+        return jsonify({"code": 1, "msg": f"「{meta['title']}」已下载或正在下载中"})
+    return jsonify({"code": 0, "msg": f"已加入下载队列: {meta['title']}"})
 
 
 @api_bp.route("/playlists/<int:pid>", methods=["PUT"])
