@@ -378,9 +378,14 @@ def _fetch_meta_with_retry(client, sid: str, write_lyric: bool, retries: int = 1
         details = client.get_song_detail([sid])
         meta = details[0] if details else {}
         if write_lyric:
-            info = client.get_lyric(sid)
-            lyric = info.get("lrc", "")
-            tlyric = info.get("tlyric", "")
+            # 歌词接口出问题不影响下载：记日志，这首不带歌词照样下
+            try:
+                info = client.get_lyric(sid)
+            except ApiProgramError as e:
+                logger.warning("歌曲 %s 取歌词失败，不带歌词继续下载: %s", sid, e)
+                info = {"lrc": "", "tlyric": ""}
+            lyric = info["lrc"]
+            tlyric = info["tlyric"]
         detail_ok = bool(meta.get("title") or meta.get("album") or meta.get("cover_url"))
         lyric_ok = (not write_lyric) or bool(lyric)
         if detail_ok and lyric_ok:

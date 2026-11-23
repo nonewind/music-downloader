@@ -316,3 +316,21 @@ def test_task_fails_with_program_reason_without_switching(webapp_app, monkeypatc
     assert row.error_msg.startswith("网易云接口程序连不上")
     assert "处理异常" not in row.error_msg
     assert _BrokenProvider.calls == 1
+
+
+# 歌词接口出问题不影响下载：不带歌词照样下（用户要求保留原来的行为）
+def test_lyric_api_error_does_not_fail_song(monkeypatch):
+    import task_manager
+
+    class _Client:
+        def get_song_detail(self, ids):
+            return [{"title": "晴天", "album": "叶惠美", "cover_url": ""}]
+
+        def get_lyric(self, sid):
+            raise ApiProgramError("网易云", "bad_response", "/lyric 返回 HTTP 502", "ncm-api")
+
+    monkeypatch.setattr(task_manager.time, "sleep", lambda s: None)
+    meta, lyric, tlyric = task_manager._fetch_meta_with_retry(_Client(), "1", write_lyric=True)
+    assert meta["title"] == "晴天"
+    assert lyric == ""
+    assert tlyric == ""

@@ -504,7 +504,7 @@ def add_by_link():
     if kind == "album":
         try:
             result = tm.download_album(item_id, "", platform=platform)
-        except ValueError as e:
+        except (ValueError, ApiProgramError) as e:
             return jsonify({"code": 1, "msg": str(e)})
         if result["total"] == 0:
             return jsonify({"code": 1, "msg": "没拿到这张专辑的歌曲，请检查链接或账号"})
