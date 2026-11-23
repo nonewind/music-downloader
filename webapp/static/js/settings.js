@@ -86,6 +86,8 @@ function settingsPage() {
             // 3s 轮询三服务状态（只在折叠区展开时请求；页面在后台时也跳过）
             this._pollTimer = setInterval(() => this.pollSvcStatuses(), 3000);
             await this.loadSettings();
+            // 进页面取一次状态：折叠区收起时也能在标题上提示接口程序异常
+            this.refreshAllSvc();
         },
         // 组件销毁兜底清理（页面整页跳转无需，SPA 式复用时防 timer 泄漏）
         destroy() {
@@ -283,14 +285,29 @@ function settingsPage() {
             return { cls: "ui-badge-danger", text: "已停止", detail };
         },
 
-        // 详情段：端口 / 配置端口 / PID / 未找到二进制（「 · 」拼接）
+        // 详情段：端口 / 配置端口 / PID / 版本 / 文件更新时间 / 未找到二进制（「 · 」拼接）
         svcDetailText(d) {
             const parts = [];
             if (d.port) parts.push(`端口 ${d.port}`);
             if (d.preferred_port && d.preferred_port !== d.port) parts.push(`配置端口 ${d.preferred_port}`);
             if (d.pid) parts.push(`PID ${d.pid}`);
+            if (d.version) parts.push(`版本 ${d.version}`);
+            if (d.bin_updated_at) parts.push(`文件 ${d.bin_updated_at}`);
             if (d.bin_exists === false) parts.push("未找到二进制");
             return parts.join(" · ");
+        },
+
+        // 最近一次接口程序异常（连不上 / 返回异常）：「时间　原因」，没有为空串
+        svcProblemText(key) {
+            if (this.isSvcCustom(key)) return "";
+            const d = this.services[key].data;
+            if (!d || !d.last_problem) return "";
+            return `${d.last_problem.at}　${d.last_problem.text}`;
+        },
+
+        // 折叠区标题提示：任一服务有异常
+        anySvcProblem() {
+            return SERVICE_DEFS.some(def => this.svcProblemText(def.key) !== "");
         },
 
         // 自定义 URL 勾选 = 内置服务端口锁定

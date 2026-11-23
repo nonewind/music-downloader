@@ -260,10 +260,14 @@ class QqClient:
                  retries: int = 3, timeout: int = 15, session=None) -> dict:
         """调用 QQ音乐 API 接口，返回 data 部分
 
-        - 连接失败：抛 RuntimeError（中文提示，供上层捕获展示）
+        接口程序的回应只在这里检查一次：
+        - 连不上 / 没响应：重试后抛 ApiProgramError(unreachable)
+        - HTTP 5xx（接口程序报错，含它连不上平台）：重试后抛 ApiProgramError(bad_response)
+        - 其他非 2xx、不是 JSON、结构不是 {"code","data":对象或null}：
+          直接抛 ApiProgramError(bad_response)
         - 上游限流（HTTP 429）：等待 1.5s 重试，重试耗尽返回 {}
         - 凭证无效（401）/ 参数错误（422）：确定性错误不重试，记日志返回 {}
-        - 其他失败：记日志返回 {}
+        - 业务失败（code != 0，平台给出）：记日志返回 {}
         - session：可选独立 Session（默认主 Session）。并发探测
           （_probe_album_size）传入独立 Session，避免多线程改写
           self.session 的 headers/CookieJar 叠加成串号状态
@@ -275,55 +279,66 @@ class QqClient:
             kwargs["params"] = params
         if body is not None:
             kwargs["json"] = body
+        last_kind = ""
+        last_detail = ""
         # url 在循环内每次重新解析：停止→重启后端口漂移时，
         # 正在重试的请求也能经 base_url 属性取到新地址
         for attempt in range(1, retries + 1):
             url = f"{self.base_url}{path}"
+            # 第 1 步：发请求；连不上就重试（瞬时断连不得被误判为鉴权失败而换号）
             try:
                 resp = method(url, **kwargs)
-                if resp.status_code == 429:
-                    logger.warning("QQ音乐API限流(429): %s 第 %d/%d 次重试", path, attempt, retries)
-                    if attempt < retries:
-                        time.sleep(1.5)
-                        continue
-                    return {}
-                if resp.status_code in (401, 422):
-                    # 401=凭证无效/过期；422=参数校验失败——确定性错误，重试无意义
-                    try:
-                        msg = (resp.json() or {}).get("msg") or ""
-                    except ValueError:
-                        msg = ""
-                    logger.warning("QQ音乐API请求失败(%d): %s %s", resp.status_code, path, msg)
-                    return {}
-                resp.raise_for_status()
-                data = resp.json()
-                # 成功响应统一为 {"code":0,"msg","data"}；HTTP 200 但 code!=0 亦视为失败
-                if not isinstance(data, dict) or data.get("code") != 0:
-                    logger.warning("QQ音乐API业务失败: %s %s", path,
-                                   (data or {}).get("msg") if isinstance(data, dict) else data)
-                    return {}
-                # 返回点单点归一为 dict：上游 data 为数组时原样返回会违反
-                # -> dict 签名，调用点 result.get(...) 直接抛 AttributeError
-                payload = data.get("data")
-                return payload if isinstance(payload, dict) else {}
-            except requests.exceptions.ConnectionError as e:
-                # 与 kugou/client.py 对齐：瞬时断连先按既有退避重试，
-                # 耗尽后才抛 RuntimeError，避免网络抖动被误判为鉴权失败而换号
+            except requests.RequestException as e:
+                last_kind = "unreachable"
+                last_detail = f"请求 {path} 失败（{e}）"
                 logger.warning("连接QQ音乐API失败 %s 第 %d/%d 次: %s",
                                path, attempt, retries, e)
                 if attempt < retries:
                     time.sleep(1.5)
+                continue
+            # 第 2 步：按 HTTP 状态分流
+            if resp.status_code == 429:
+                logger.warning("QQ音乐API限流(429): %s 第 %d/%d 次重试", path, attempt, retries)
+                if attempt < retries:
+                    time.sleep(1.5)
                     continue
-                raise RuntimeError(
-                    f"无法连接QQ音乐API服务（{self.base_url}），"
-                    f"请检查服务是否运行或地址配置是否正确: {e}"
-                ) from e
-            except (requests.RequestException, ValueError) as e:
-                logger.warning("请求 %s 第 %d 次失败: %s", path, attempt, e)
+                return {}
+            if resp.status_code in (401, 422):
+                # 401=凭证无效/过期；422=参数校验失败——确定性错误，重试无意义
+                logger.warning("QQ音乐API请求失败(%d): %s %s",
+                               resp.status_code, path, resp.text[:200])
+                return {}
+            if resp.status_code >= 500:
+                last_kind = "bad_response"
+                last_detail = f"{path} 返回 HTTP {resp.status_code}：{resp.text[:200]}"
+                logger.warning("请求 %s 第 %d 次失败: HTTP %d", path, attempt, resp.status_code)
                 if attempt < retries:
                     time.sleep(1.5 * attempt)
+                continue
+            if resp.status_code != 200:
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 返回 HTTP {resp.status_code}：{resp.text[:200]}")
+            # 第 3 步：检查返回结构 {"code", "msg", "data"}
+            try:
+                data = resp.json()
+            except ValueError:
+                raise self._bridge.problem("bad_response", f"{path} 返回的不是 JSON")
+            if not isinstance(data, dict) or "code" not in data:
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 返回的数据里没有 code：{resp.text[:200]}")
+            if data["code"] != 0:
+                logger.warning("QQ音乐API业务失败: %s %s", path, data.get("msg"))
+                return {}
+            # 第 4 步：data 按接口程序文档（/openapi.json）为对象或 null
+            payload = data.get("data")
+            if payload is None:
+                return {}
+            if not isinstance(payload, dict):
+                raise self._bridge.problem(
+                    "bad_response", f"{path} 的 data 不是对象（{type(payload).__name__}）")
+            return payload
         logger.error("请求 %s 失败，已重试 %d 次", path, retries)
-        return {}
+        raise self._bridge.problem(last_kind, f"{last_detail}，已重试 {retries} 次")
 
     # ------------------------------------------------------------------
     # 账号信息
@@ -352,7 +367,7 @@ class QqClient:
               自动兼容秒/毫秒）
 
         Raises:
-            RuntimeError: API 服务连接失败
+            ApiProgramError: 接口程序连不上或返回异常（不是账号问题）
         """
         err = {"ok": False, "nickname": "", "vip_type": 0, "vip_expire_ts": 0, "msg": ""}
         # 限流（429）等待后重试一次；401（无凭证）为确定性错误直接返回
@@ -361,38 +376,35 @@ class QqClient:
             url = f"{self.base_url}/user/get_vip_info"
             try:
                 resp = self.session.get(url, timeout=10)
-            except requests.exceptions.ConnectionError as e:
-                raise RuntimeError(
-                    f"无法连接QQ音乐API服务（{self.base_url}），"
-                    f"请检查服务是否运行或地址配置是否正确: {e}"
-                ) from e
             except requests.RequestException as e:
-                raise RuntimeError(f"请求QQ音乐API服务失败: {e}") from e
+                raise self._bridge.problem(
+                    "unreachable", f"请求 /user/get_vip_info 失败（{e}）") from e
             if resp.status_code == 429 and attempt == 1:
                 logger.warning("QQ音乐API限流(429): /user/get_vip_info 重试一次")
                 time.sleep(1.5)
                 continue
             break
 
-        if resp is None:
-            err["msg"] = "QQ音乐API请求失败"
-            return err
         if resp.status_code == 429:
             err["msg"] = "QQ音乐API限流（429），请稍后重试"
             return err
         if resp.status_code == 401:
             err["msg"] = "未提供登录凭证（Cookie 缺失或不完整）"
             return err
+        # 接口程序问题（非 200 / 不是 JSON / 没有 code）单独报出，不说成「Cookie 无效」
         if resp.status_code != 200:
-            err["msg"] = f"QQ音乐API返回异常状态码 {resp.status_code}"
-            return err
+            raise self._bridge.problem(
+                "bad_response",
+                f"/user/get_vip_info 返回 HTTP {resp.status_code}：{resp.text[:200]}")
         try:
             data = resp.json()
         except ValueError:
-            err["msg"] = "QQ音乐API返回非 JSON 数据"
-            return err
-        if not isinstance(data, dict) or data.get("code") != 0:
-            err["msg"] = (data or {}).get("msg") if isinstance(data, dict) else "QQ音乐API业务失败"
+            raise self._bridge.problem("bad_response", "/user/get_vip_info 返回的不是 JSON")
+        if not isinstance(data, dict) or "code" not in data:
+            raise self._bridge.problem(
+                "bad_response", f"/user/get_vip_info 返回的数据里没有 code：{resp.text[:200]}")
+        if data["code"] != 0:
+            err["msg"] = data.get("msg") or "QQ音乐API业务失败"
             return err
 
         result = data.get("data") or {}

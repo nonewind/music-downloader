@@ -43,6 +43,7 @@ from core.downloader import DownloadAborted, Downloader, build_filename, sanitiz
 from core.audio_fingerprint import audio_fingerprint
 from core.metadata import write_tags
 from core.organizer import AUDIO_EXTS
+from core.providers._bridge_base import ApiProgramError
 from core.providers.base import MusicProvider
 from core.providers.netease import NeteaseProvider
 from core.providers.qq.client import merge_refreshed_cookie
@@ -1372,6 +1373,11 @@ class TaskManager:
                 # 若无此分支，会被下面的 except Exception 捕获并调用
                 # _mark_failed_by_pk，把 paused 任务错误地改写为 failed
                 logger.info("任务 %s 已被用户中止", pk)
+            except ApiProgramError as e:
+                # 接口程序连不上/返回异常：原因原样写进任务（不加「处理异常」前缀），
+                # 不换账号重试——换号对接口程序问题无意义
+                logger.error("任务 %s 失败（接口程序问题）: %s", pk, e)
+                self._mark_failed_by_pk(pk, str(e))
             except Exception as e:
                 logger.exception("处理任务 %s 异常: %s", pk, e)
                 try:

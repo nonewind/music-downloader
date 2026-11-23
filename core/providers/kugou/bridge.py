@@ -30,6 +30,9 @@ _BINARIES = {
 class KuGouApiBridge(ApiBridge):
     BINARIES = _BINARIES
     LABEL = "酷狗音乐API"
+    NAME = "酷狗"
+    # 没有版本接口（2026-11-22 本地实测 /version、/inner/version 均 404），
+    # 设置页以文件更新时间区分新旧版本
     MISSING_BINARY_MSG = (
         "未找到酷狗音乐API二进制: {path}\n"
         "请将 kugou-api 对应平台版本放到 api/ 目录"

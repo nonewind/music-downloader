@@ -69,6 +69,7 @@
     .set-svchead { font-size: 15px; font-weight: 600; color: var(--ui-text); }
     .set-svcstatus { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; min-height: 22px; }
     .set-svcdetail { font-size: 13px; color: var(--ui-text-3); }
+    .set-svcproblem { font-size: 13px; color: var(--ui-danger); margin: -4px 0 10px; word-break: break-all; }
     .set-svcctl { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
     .set-inlinelabel { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; color: var(--ui-text-2); }
     .set-port { width: 100px; }
@@ -355,6 +356,7 @@
                     <div class="ui-card">
                         <button type="button" class="set-cardhead set-foldhead" @click="toggleApiFold()" :aria-expanded="apiOpen ? 'true' : 'false'">
                             <i class="bi bi-hdd-network"></i> 高级：API 服务
+                            <span class="ui-badge ui-badge-danger" x-show="anySvcProblem()">异常</span>
                             <i class="bi bi-chevron-down set-foldicon" :class="{ 'is-open': apiOpen }"></i>
                         </button>
                         <div class="ui-collapse" :class="{ 'is-open': apiOpen }"><div class="ui-collapse-in">
@@ -368,6 +370,9 @@
                                         <span class="ui-badge" :class="svcBadge(svc.key).cls" x-text="svcBadge(svc.key).text"></span>
                                         <span class="set-svcdetail" x-text="svcBadge(svc.key).detail"></span>
                                     </div>
+                                    <!-- 最近一次接口程序异常（重新启动成功后清空） -->
+                                    <div class="set-svcproblem" x-show="svcProblemText(svc.key)"
+                                         x-text="svcProblemText(svc.key)"></div>
                                     <!-- 端口（勾选自定义URL后锁定：内置服务端口不生效） -->
                                     <div class="set-svcctl" :class="{ 'set-locked': isSvcCustom(svc.key) }">
                                         <label class="set-inlinelabel">端口
