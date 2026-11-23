@@ -667,6 +667,10 @@ class TaskManager:
         # 「这一批」见过的任务 pk：队列从空变成有任务算一批开始，清空算结束。
         # 下载条用它算整批进度（已完成 / 总数）；只在内存里，重启后从头算
         self._batch_pks: set[int] = set()
+        # 「优先下载」的任务 pk，排在最前的先下（后点的排到最前）。worker 每取
+        # 一首前先看这里，所以不打断正在下的那首。原来的队列条目留着，轮到时
+        # 任务已不是 pending，会被状态守门跳过。只在内存里，重启后按加入顺序
+        self._next_pks: list[int] = []
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -1367,10 +1371,22 @@ class TaskManager:
     def _worker_loop(self) -> None:
         logger.info("下载工作线程已启动")
         while not self._stop_event.is_set():
-            try:
-                pk = self._task_queue.get(timeout=1)
-            except queue.Empty:
-                continue
+            # 第 1 步：先取「优先下载」的任务
+            with self._control_lock:
+                if self._next_pks:
+                    next_pk = self._next_pks.pop(0)
+                else:
+                    next_pk = None
+            # 第 2 步：没有优先的，再按加入顺序从队列取
+            if next_pk is not None:
+                pk = next_pk
+                from_queue = False
+            else:
+                try:
+                    pk = self._task_queue.get(timeout=1)
+                except queue.Empty:
+                    continue
+                from_queue = True
             try:
                 self._process_task(pk)
             except DownloadAborted:
@@ -1390,7 +1406,9 @@ class TaskManager:
                 except Exception:
                     logger.exception("标记任务 %s 失败状态时再次异常", pk)
             finally:
-                self._task_queue.task_done()
+                # 只有从队列取出的才要回报队列
+                if from_queue:
+                    self._task_queue.task_done()
 
     # ------------------------------------------------------------------
     # 用户任务控制：暂停 / 继续 / 删除
@@ -2210,6 +2228,26 @@ class TaskManager:
         logger.info("任务已继续: pk=%s", pk)
         return True, "已继续"
 
+    def prioritize_task(self, pk: int) -> tuple[bool, str]:
+        """优先下载：把等待中的任务排到下一首
+
+        不打断正在下载的那首，它下完就轮到这首。多次点击时后点的排在最前。
+        """
+        # 第 1 步：只有等待中的任务能优先
+        with self.app.app_context():
+            task = db.session.get(DownloadTask, pk)
+            if not task:
+                return False, "任务不存在"
+            if task.status != "pending":
+                return False, f"任务当前状态（{task.status}）不可优先下载"
+        # 第 2 步：放到优先列表最前（已在列表里就挪到最前）
+        with self._control_lock:
+            if pk in self._next_pks:
+                self._next_pks.remove(pk)
+            self._next_pks.insert(0, pk)
+        logger.info("任务已排到下一首: pk=%s", pk)
+        return True, "已排到下一首"
+
     def delete_task(self, pk: int) -> tuple[bool, str]:
         """删除单个任务
 
@@ -2231,9 +2269,12 @@ class TaskManager:
                 self._clear_abort(pk)
             DownloadTask.query.filter(DownloadTask.pk == pk).delete(synchronize_session=False)
             db.session.commit()
-        # 删掉的歌不算这一批「已完成」，直接从这一批里去掉（总数跟着减）
+        # 删掉的歌不算这一批「已完成」，直接从这一批里去掉（总数跟着减）。
+        # 也从优先下载里去掉：SQLite 会复用已删除行的 pk，留着会让新任务被误插队
         with self._control_lock:
             self._batch_pks.discard(pk)
+            if pk in self._next_pks:
+                self._next_pks.remove(pk)
         logger.info("任务已删除: pk=%s (原状态 %s)", pk, status)
         return True, "已删除任务"
 
@@ -2303,10 +2344,14 @@ class TaskManager:
             acc_ids = {t.account_id for t in tasks if t.account_id}
             names = dict(db.session.query(Account.id, Account.name).filter(
                 Account.id.in_(acc_ids)).all()) if acc_ids else {}
+            with self._control_lock:
+                next_pks = set(self._next_pks)
             result = []
             for t in tasks:
                 d = t.to_dict()
                 d["account_name"] = names.get(t.account_id)
+                # 已点过「优先下载」、还在等待的，下载页显示「优先」
+                d["prioritized"] = t.pk in next_pks and t.status == "pending"
                 result.append(d)
             return result
 

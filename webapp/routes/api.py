@@ -15,6 +15,7 @@
 - GET    /api/tasks               获取当前活跃任务进度
 - POST   /api/tasks/<pk>/pause    暂停指定下载任务（保留 .part 断点）
 - POST   /api/tasks/<pk>/resume   继续指定下载任务（断点续传）
+- POST   /api/tasks/<pk>/prioritize 优先下载：等待中的任务排到下一首
 - DELETE /api/tasks/<pk>          删除指定下载任务（中止传输并清理临时文件）
 - POST   /api/tasks/pause-all     暂停全部下载任务
 - POST   /api/tasks/resume-all    继续全部下载任务
@@ -1058,6 +1059,14 @@ def resume_task(pk: int):
     """继续（恢复）指定已暂停任务"""
     tm = _get_task_manager()
     ok, msg = tm.resume_task(pk)
+    return jsonify({"code": 0 if ok else 1, "msg": msg})
+
+
+@api_bp.route("/tasks/<int:pk>/prioritize", methods=["POST"])
+def prioritize_task(pk: int):
+    """优先下载：等待中的任务排到下一首（不打断正在下载的）"""
+    tm = _get_task_manager()
+    ok, msg = tm.prioritize_task(pk)
     return jsonify({"code": 0 if ok else 1, "msg": msg})
 
 

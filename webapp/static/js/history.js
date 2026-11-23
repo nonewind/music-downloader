@@ -143,7 +143,7 @@ function historyPage() {
             }
         },
 
-        // 单任务 暂停/继续/删除（action: pause|resume|delete；删除需确认）
+        // 单任务 暂停/继续/优先下载/删除（action: pause|resume|prioritize|delete；删除需确认）
         async taskAction(t, action) {
             if (this.taskLocked(t.pk)) return;
             if (action === "delete") {

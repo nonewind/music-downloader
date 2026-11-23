@@ -65,6 +65,7 @@
                         <div class="list-title">
                             <span class="ui-truncate" x-text="t.song_name" :title="t.song_name"></span>
                             <span class="ui-badge ui-badge-info" x-show="t.kind === 'upgrade'">升级</span>
+                            <span class="ui-badge ui-badge-info" x-show="t.prioritized">优先</span>
                         </div>
                         <div class="list-sub" x-show="t.status !== 'downloading' && !t.error_msg" x-text="t.artists"></div>
                         {# 错误信息行：truncate + title 全文 #}
@@ -89,6 +90,12 @@
                                     :disabled="taskLocked(t.pk)" @click="taskAction(t, 'resume')"
                                     title="继续（断点续传）" aria-label="继续任务">
                                 <i class="bi bi-play-fill"></i>
+                            </button>
+                            <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="t.status === 'pending'"
+                                    :class="{ 'is-loading': taskOpBusy(t.pk, 'prioritize') }"
+                                    :disabled="taskLocked(t.pk)" @click="taskAction(t, 'prioritize')"
+                                    title="优先下载（排到下一首）" aria-label="优先下载">
+                                <i class="bi bi-arrow-bar-up"></i>
                             </button>
                             <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
                                     :class="{ 'is-loading': taskOpBusy(t.pk, 'delete') }"
