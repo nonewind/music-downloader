@@ -1,4 +1,4 @@
-// 下载页：上段正在进行的任务 + 下段下载记录（一行一条）
+// 下载页：两个标签，「正在下载」放任务，「下载记录」放记录（一行一条）
 //
 // 依赖全局工具（app.js 先于本脚本加载）：api()（统一 APP_BASE/401/业务码，
 // 默认 15s timeout，本页全部走默认）、showToast()、uiConfirm()（Promise 确认框，
@@ -36,6 +36,9 @@ function historyPage() {
     };
 
     return {
+        // 当前标签：run 正在下载 / his 下载记录（进页面时有任务就看正在下载）
+        tab: "run",
+
         // ---- 任务区状态 ----
         tasks: [],
         pausedAll: false,        // 服务端全局暂停标记（随每轮 /api/tasks 校正）
@@ -47,6 +50,7 @@ function historyPage() {
         // ---- 历史区状态 ----
         songs: [],
         total: 0,
+        allTotal: 0,             // 不带筛选的记录总数（标签上的数字）
         page: 1,
         pages: 1,
         perPage: 20,
@@ -79,6 +83,10 @@ function historyPage() {
         // Alpine 组件初始化
         async init() {
             await this.loadTasks();
+            // 没有任务时直接看下载记录
+            if (!this.tasks.length) {
+                this.tab = "his";
+            }
             this.loadSongs();
             this.pollTimer = setInterval(() => {
                 if (document.hidden || !this.hasActive) return;  // 后台/无任务静默
@@ -118,6 +126,11 @@ function historyPage() {
         // 全局按钮可用性按列表重算（与旧版一致）：
         // 暂停全部：无"可暂停"任务时禁用；继续全部：有已暂停任务或处于
         // 全局暂停态时启用（便于清除全局标记）
+        // 正在下载标签上方的数量：下载中 / 等待中 / 已暂停
+        countStatus(status) {
+            return this.tasks.filter(t => t.status === status).length;
+        },
+
         get canPauseAll() {
             return this.tasks.some(t => t.status !== "paused");
         },
@@ -222,6 +235,13 @@ function historyPage() {
                 this.songs = data.data || [];
                 this.total = data.total || 0;
                 this.pages = data.pages || 1;
+                // 标签上的总数不跟筛选变：没筛选时就是 total，筛选时另查一次
+                if (!this.statusFilter && !kw) {
+                    this.allTotal = this.total;
+                } else {
+                    const allData = await api("/api/songs?per_page=1");
+                    this.allTotal = allData.total || 0;
+                }
                 // 勾选随刷新重置（与旧版每次加载后全不勾一致）
                 this.checked = new Set();
                 // 失败重试栏：只要库内存在失败记录就显示（不依赖当前筛选），

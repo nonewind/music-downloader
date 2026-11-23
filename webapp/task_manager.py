@@ -667,7 +667,7 @@ class TaskManager:
         # 「这一批」见过的任务 pk：队列从空变成有任务算一批开始，清空算结束。
         # 下载条用它算整批进度（已完成 / 总数）；只在内存里，重启后从头算
         self._batch_pks: set[int] = set()
-        # 「优先下载」的任务 pk，排在最前的先下（后点的排到最前）。worker 每取
+        # 「优先下载」的任务 pk，按点击顺序排，先点的先下。worker 每取
         # 一首前先看这里，所以不打断正在下的那首。原来的队列条目留着，轮到时
         # 任务已不是 pending，会被状态守门跳过。只在内存里，重启后按加入顺序
         self._next_pks: list[int] = []
@@ -2229,9 +2229,10 @@ class TaskManager:
         return True, "已继续"
 
     def prioritize_task(self, pk: int) -> tuple[bool, str]:
-        """优先下载：把等待中的任务排到下一首
+        """优先下载：把等待中的任务排到其它等待中的歌前面
 
-        不打断正在下载的那首，它下完就轮到这首。多次点击时后点的排在最前。
+        不打断正在下载的那首。多首优先时按点击顺序，先点的先下；
+        已经优先过的再点一次，位置不变。
         """
         # 第 1 步：只有等待中的任务能优先
         with self.app.app_context():
@@ -2240,13 +2241,12 @@ class TaskManager:
                 return False, "任务不存在"
             if task.status != "pending":
                 return False, f"任务当前状态（{task.status}）不可优先下载"
-        # 第 2 步：放到优先列表最前（已在列表里就挪到最前）
+        # 第 2 步：排到优先列表末尾（已在列表里就不动）
         with self._control_lock:
-            if pk in self._next_pks:
-                self._next_pks.remove(pk)
-            self._next_pks.insert(0, pk)
-        logger.info("任务已排到下一首: pk=%s", pk)
-        return True, "已排到下一首"
+            if pk not in self._next_pks:
+                self._next_pks.append(pk)
+        logger.info("任务已设为优先: pk=%s", pk)
+        return True, "已设为优先"
 
     def delete_task(self, pk: int) -> tuple[bool, str]:
         """删除单个任务
@@ -2345,7 +2345,7 @@ class TaskManager:
             names = dict(db.session.query(Account.id, Account.name).filter(
                 Account.id.in_(acc_ids)).all()) if acc_ids else {}
             with self._control_lock:
-                next_pks = set(self._next_pks)
+                next_pks = list(self._next_pks)
             result = []
             for t in tasks:
                 d = t.to_dict()
@@ -2353,6 +2353,16 @@ class TaskManager:
                 # 已点过「优先下载」、还在等待的，下载页显示「优先」
                 d["prioritized"] = t.pk in next_pks and t.status == "pending"
                 result.append(d)
+            # 按实际下载顺序排：正在下的在最前，然后是优先的（按点击顺序），
+            # 其余保持加入顺序
+            def download_order(d):
+                if d["status"] == "downloading":
+                    return (0, 0)
+                elif d["prioritized"]:
+                    return (1, next_pks.index(d["pk"]))
+                else:
+                    return (2, 0)
+            result.sort(key=download_order)
             return result
 
     def batch_counts(self, active_pks: list[int]) -> tuple[int, int]:

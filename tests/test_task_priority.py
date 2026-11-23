@@ -1,8 +1,9 @@
-"""优先下载：等待中的任务排到下一首。
+"""优先下载：等待中的任务排到其它等待中的歌前面。
 
 - 只对 pending 可用，其它状态返回明确错误
 - 不打断正在下载的那首，下完就轮到优先的
-- 多次点击时后点的排在最前
+- 多次点击时先点的先下，再点一次位置不变
+- 下载页列表按实际下载顺序排
 - 删除任务时从优先列表里去掉（pk 会被复用）
 - 只在内存里，重启后按加入顺序
 """
@@ -53,7 +54,7 @@ def test_prioritized_task_goes_next(tm):
 
     ok, msg = tm.prioritize_task(c)
 
-    assert (ok, msg) == (True, "已排到下一首")
+    assert (ok, msg) == (True, "已设为优先")
     order = _run_worker(tm)
     # 原来的队列条目还在，轮到时由 _process_task 的状态守门跳过
     assert order == [c, a, b, c]
@@ -74,19 +75,19 @@ def test_does_not_interrupt_current_task(tm):
     assert order[:3] == [a, c, b]
 
 
-def test_later_click_goes_first(tm):
+def test_earlier_click_goes_first(tm):
     a, b, c = _task("A"), _task("B"), _task("C")
     for pk in (a, b, c):
         tm._task_queue.put(pk)
 
-    tm.prioritize_task(b)
     tm.prioritize_task(c)
-    # 再点一次 B：挪回最前，不重复
     tm.prioritize_task(b)
+    # 再点一次 C：位置不变，不重复
+    tm.prioritize_task(c)
 
-    assert tm._next_pks == [b, c]
+    assert tm._next_pks == [c, b]
     order = _run_worker(tm)
-    assert order[:3] == [b, c, a]
+    assert order[:3] == [c, b, a]
 
 
 @pytest.mark.parametrize("status", ["downloading", "paused", "done", "failed", "skipped"])
@@ -137,6 +138,18 @@ def test_active_tasks_show_prioritized(tm):
     assert rows[b]["prioritized"] is True
 
 
+def test_active_tasks_in_download_order(tm):
+    a, b, c = _task("A"), _task("B"), _task("C")
+    d = _task("D", status="downloading")
+    tm.prioritize_task(c)
+    tm.prioritize_task(b)
+
+    order = [r["pk"] for r in tm.get_active_tasks()]
+
+    # 正在下的最前，然后优先的按点击顺序，最后其余按加入顺序
+    assert order == [d, c, b, a]
+
+
 def test_priority_not_kept_after_restart(webapp_app):
     (app,) = webapp_app
     a, b = _task("A"), _task("B")
@@ -169,6 +182,6 @@ def test_api_prioritize(client):
     bad = client.post(f"/api/tasks/{paused}/prioritize").get_json()
     missing = client.post("/api/tasks/9999/prioritize").get_json()
 
-    assert ok == {"code": 0, "msg": "已排到下一首"}
+    assert ok == {"code": 0, "msg": "已设为优先"}
     assert bad == {"code": 1, "msg": "任务当前状态（paused）不可优先下载"}
     assert missing == {"code": 1, "msg": "任务不存在"}

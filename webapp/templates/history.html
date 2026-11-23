@@ -6,7 +6,7 @@
 <style>
     /* 下载页局部样式（hist- 前缀；通用积木 list-/chip/sec- 在 app.css） */
     .hist-task-busy { opacity: .6; }
-    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 20px; margin-top: 16px; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 15px; font-weight: 600; }
+    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 20px; margin-bottom: 16px; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 15px; font-weight: 600; }
     .hist-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
     .hist-filter .ui-input { flex: 1 1 200px; min-width: 0; max-width: 320px; }
     .hist-batchbar { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-bottom: 4px; padding-left: 12px; font-size: 14px; color: var(--ui-text-2); }
@@ -29,6 +29,16 @@
     .hist-uphint { margin: 10px 0 0; font-size: 13px; color: var(--ui-text-2); }
     .hist-upfoot { flex: 1; align-self: center; font-size: 13px; color: var(--ui-text-2); }
     .hist-upfoot.is-over { color: var(--ui-danger); }
+    .hist-seg { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 20px; border-radius: var(--ui-r-m); background: #ecece7; }
+    .hist-seg button { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px; border: 0; border-radius: var(--ui-r-s); background: transparent; color: var(--ui-text-2); font-size: 15px; font-weight: 600; white-space: nowrap; }
+    .hist-seg button:hover { color: var(--ui-text); }
+    .hist-seg button.active { background: var(--ui-surface); color: var(--ui-text); box-shadow: 0 1px 3px rgba(26, 29, 33, .12); }
+    .hist-seg button:focus-visible { outline: 2px solid var(--ui-primary); outline-offset: 2px; }
+    .hist-seg .num { font-size: 13px; color: var(--ui-text-3); font-variant-numeric: tabular-nums; }
+    .hist-seg button.active .num { color: var(--ui-primary); }
+    .hist-seg .fail { padding: 0 7px; border-radius: 10px; background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 12px; font-weight: 700; line-height: 18px; }
+    .hist-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 12px; font-size: 14px; color: var(--ui-text-2); }
+    .hist-sum b { color: var(--ui-text); font-variant-numeric: tabular-nums; }
     .hist-failreason { margin: 0; padding: 10px 12px; color: var(--ui-text); background: var(--ui-danger-soft); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-s); white-space: pre-wrap; word-break: break-all; }
     @media (max-width: 767.98px) {
         .hist-row, .hist-taskrow { flex-wrap: wrap; }
@@ -36,28 +46,46 @@
         .hist-row .list-side { flex: 1; justify-content: space-between; padding-left: 50px; }
         .hist-taskrow .list-main { flex-basis: 100%; }
         .hist-taskrow .list-side { flex: 1; justify-content: space-between; }
+        .hist-seg { display: flex; width: 100%; }
+        .hist-seg button { flex: 1; justify-content: center; padding: 0 8px; }
     }
 </style>
 
 <div x-data="historyPage()" x-cloak>
-    <!-- 1. 页头：标题 + 全局操作 -->
+    <!-- 1. 页头：标题 + 当前标签的全局操作 -->
     <div class="page-head">
         <h1 class="page-title">下载</h1>
         <div class="page-actions">
             {{ ui.btn('暂停全部', 'secondary', size='sm', icon='pause-fill',
-                      attrs={'x-show': 'tasks.length', ':disabled': '!canPauseAll || allOpsBusy', '@click': 'pauseAll()'}) }}
+                      attrs={'x-show': "tab === 'run' && tasks.length", ':disabled': '!canPauseAll || allOpsBusy', '@click': 'pauseAll()'}) }}
             {{ ui.btn('继续全部', 'secondary', size='sm', icon='play-fill',
-                      attrs={'x-show': 'tasks.length', ':disabled': '!canResumeAll || allOpsBusy', '@click': 'resumeAll()'}) }}
-            {{ ui.btn('音质升级', 'secondary', size='sm', icon='graph-up-arrow', attrs={'@click': 'openUpgrade()'}) }}
+                      attrs={'x-show': "tab === 'run' && tasks.length", ':disabled': '!canResumeAll || allOpsBusy', '@click': 'resumeAll()'}) }}
+            {{ ui.btn('音质升级', 'secondary', size='sm', icon='graph-up-arrow',
+                      attrs={'x-show': "tab === 'his'", '@click': 'openUpgrade()'}) }}
         </div>
     </div>
 
-    <!-- 2. 正在进行的任务（没有任务时整块不显示） -->
-    <div x-show="tasks.length">
-        <div class="sec-head" style="margin-top: 0">
-            <h2 class="sec-title">正在进行 <span class="ui-text-2 ui-mono" x-text="tasks.length"></span></h2>
+    <!-- 2. 两个标签：正在下载 / 下载记录 -->
+    <div class="hist-seg" role="tablist" aria-label="下载页">
+        <button type="button" role="tab" :class="{ active: tab === 'run' }"
+                :aria-selected="tab === 'run' ? 'true' : 'false'" @click="tab = 'run'">
+            正在下载 <span class="num" x-text="tasks.length"></span>
+        </button>
+        <button type="button" role="tab" :class="{ active: tab === 'his' }"
+                :aria-selected="tab === 'his' ? 'true' : 'false'" @click="tab = 'his'">
+            下载记录 <span class="num" x-text="allTotal"></span>
+            <span class="fail" x-show="failedCount > 0" x-text="failedCount + ' 失败'"></span>
+        </button>
+    </div>
+
+    <!-- 3. 正在下载 -->
+    <section x-show="tab === 'run'">
+        <div class="hist-sum" x-show="tasks.length">
+            <span>下载中 <b x-text="countStatus('downloading')"></b></span>
+            <span>等待中 <b x-text="countStatus('pending')"></b></span>
+            <span>已暂停 <b x-text="countStatus('paused')"></b></span>
         </div>
-        <div class="list-card">
+        <div class="list-card" x-show="tasks.length">
             <template x-for="t in tasks" :key="t.pk">
                 <div class="list-row hist-taskrow"
                      :class="{ 'hist-task-busy': taskLocked(t.pk), 'is-active': t.status === 'downloading' }">
@@ -65,7 +93,7 @@
                         <div class="list-title">
                             <span class="ui-truncate" x-text="t.song_name" :title="t.song_name"></span>
                             <span class="ui-badge ui-badge-info" x-show="t.kind === 'upgrade'">升级</span>
-                            <span class="ui-badge ui-badge-info" x-show="t.prioritized">优先</span>
+                            <span class="ui-badge ui-badge-warning" x-show="t.prioritized">优先</span>
                         </div>
                         <div class="list-sub" x-show="t.status !== 'downloading' && !t.error_msg" x-text="t.artists"></div>
                         {# 错误信息行：truncate + title 全文 #}
@@ -94,7 +122,7 @@
                             <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="t.status === 'pending'"
                                     :class="{ 'is-loading': taskOpBusy(t.pk, 'prioritize') }"
                                     :disabled="taskLocked(t.pk)" @click="taskAction(t, 'prioritize')"
-                                    title="优先下载（排到下一首）" aria-label="优先下载">
+                                    title="优先下载" aria-label="优先下载">
                                 <i class="bi bi-arrow-bar-up"></i>
                             </button>
                             <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm"
@@ -108,9 +136,14 @@
                 </div>
             </template>
         </div>
-    </div>
+        <div x-show="!tasks.length">
+            {{ ui.empty('download', '没有正在下载的歌') }}
+        </div>
+    </section>
 
-    <!-- 3. 失败提示条：库内存在失败记录即显示（不依赖当前筛选） -->
+    <!-- 4. 下载记录 -->
+    <section x-show="tab === 'his'">
+    {# 4.0 失败提示条：库内存在失败记录即显示（不依赖当前筛选） #}
     <div class="hist-retrybar" x-show="failedCount > 0">
         <span><i class="bi bi-exclamation-triangle"></i> 有 <span class="ui-mono" x-text="failedCount"></span> 首下载失败</span>
         <span class="ui-row-actions">
@@ -119,11 +152,6 @@
             {{ ui.btn('清除失败记录', 'ghost', size='sm',
                       attrs={':disabled': 'clearFailedBusy', '@click': 'clearFailed()'}) }}
         </span>
-    </div>
-
-    <!-- 4. 下载记录 -->
-    <div class="sec-head">
-        <h2 class="sec-title">下载记录</h2>
     </div>
 
     {# 4.1 筛选：状态点一下就生效；关键词回车生效 #}
@@ -217,6 +245,7 @@
     <div x-show="!loadingSongs && total === 0">
         {{ ui.empty('inbox', '这里还没有下载记录') }}
     </div>
+    </section>
 
     {# 5. 删除三选 Modal（单删/批删共用，$store.modals.delSong；标题随单/批量，
        宏的 title 为静态文本，故按宏同款结构手写以承载 x-text 标题） #}
