@@ -6,17 +6,17 @@
 <style>
     /* 下载页局部样式（hist- 前缀；通用积木 list-/chip/sec- 在 app.css） */
     .hist-task-busy { opacity: .6; }
-    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 20px; margin-bottom: 16px; border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 15px; font-weight: 600; }
-    .hist-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ui-sp-2); padding: var(--ui-sp-3) var(--ui-sp-5); margin-bottom: var(--ui-sp-4); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 15px; font-weight: 600; }
+    .hist-filter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2); margin-bottom: var(--ui-sp-3); }
     .hist-filter .ui-input { flex: 1 1 200px; min-width: 0; max-width: 320px; }
-    .hist-batchbar { display: flex; align-items: center; gap: 8px; min-height: 44px; margin-bottom: 4px; padding-left: 12px; font-size: 14px; color: var(--ui-text-2); }
+    .hist-batchbar { display: flex; align-items: center; gap: var(--ui-sp-2); min-height: 44px; margin-bottom: var(--ui-sp-1); padding-left: var(--ui-sp-3); font-size: 14px; color: var(--ui-text-2); }
     .hist-batchbar .ui-btn { margin-left: auto; }
-    .hist-row { padding-left: 12px; }
+    .list-row.hist-row { padding-left: var(--ui-sp-3); }
     .hist-metaline { font-size: 13px; color: var(--ui-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .hist-filestate { font-size: 12px; line-height: 18px; padding: 0 8px; }
     .hist-failbtn { font: inherit; font-size: 13px; font-weight: 500; border: 0; cursor: pointer; }
     .hist-meta { margin: 0 0 8px; font-size: 15px; }
-    .hist-delwarn { margin: 0; padding: 10px 12px; font-size: 14px; color: #7a5200; background: #f3e9d2; border-radius: var(--ui-r-s); }
+    .hist-delwarn { margin: 0; padding: var(--ui-sp-2) var(--ui-sp-3); font-size: 14px; border-radius: var(--ui-r-s); }
     .hist-upmodal { width: 860px; }
     .hist-upbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 14px; }
     .hist-upbar label { display: flex; align-items: center; gap: 6px; color: var(--ui-text-2); }
@@ -29,15 +29,8 @@
     .hist-uphint { margin: 10px 0 0; font-size: 13px; color: var(--ui-text-2); }
     .hist-upfoot { flex: 1; align-self: center; font-size: 13px; color: var(--ui-text-2); }
     .hist-upfoot.is-over { color: var(--ui-danger); }
-    .hist-seg { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 20px; border-radius: var(--ui-r-m); background: #ecece7; }
-    .hist-seg button { display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 20px; border: 0; border-radius: var(--ui-r-s); background: transparent; color: var(--ui-text-2); font-size: 15px; font-weight: 600; white-space: nowrap; }
-    .hist-seg button:hover { color: var(--ui-text); }
-    .hist-seg button.active { background: var(--ui-surface); color: var(--ui-text); box-shadow: 0 1px 3px rgba(26, 29, 33, .12); }
-    .hist-seg button:focus-visible { outline: 2px solid var(--ui-primary); outline-offset: 2px; }
-    .hist-seg .num { font-size: 13px; color: var(--ui-text-3); font-variant-numeric: tabular-nums; }
-    .hist-seg button.active .num { color: var(--ui-primary); }
-    .hist-seg .fail { padding: 0 7px; border-radius: 10px; background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 12px; font-weight: 700; line-height: 18px; }
-    .hist-sum { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 12px; font-size: 14px; color: var(--ui-text-2); }
+    .hist-tabs { margin-bottom: var(--ui-sp-4); }
+    .hist-sum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2) var(--ui-sp-4); margin: 0 0 var(--ui-sp-3); font-size: 14px; color: var(--ui-text-2); }
     .hist-sum b { color: var(--ui-text); font-variant-numeric: tabular-nums; }
     .hist-failreason { margin: 0; padding: 10px 12px; color: var(--ui-text); background: var(--ui-danger-soft); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-s); white-space: pre-wrap; word-break: break-all; }
     @media (max-width: 767.98px) {
@@ -46,8 +39,6 @@
         .hist-row .list-side { flex: 1; justify-content: space-between; padding-left: 50px; }
         .hist-taskrow .list-main { flex-basis: 100%; }
         .hist-taskrow .list-side { flex: 1; justify-content: space-between; }
-        .hist-seg { display: flex; width: 100%; }
-        .hist-seg button { flex: 1; justify-content: center; padding: 0 8px; }
     }
 </style>
 
@@ -65,16 +56,16 @@
         </div>
     </div>
 
-    <!-- 2. 两个标签：正在下载 / 下载记录 -->
-    <div class="hist-seg" role="tablist" aria-label="下载页">
-        <button type="button" role="tab" :class="{ active: tab === 'run' }"
+    <!-- 2. 两个标签：正在下载 / 下载记录（用公共选项片 chip，和音乐库「浏览/待处理」一样） -->
+    <div class="chips hist-tabs" role="tablist" aria-label="下载页">
+        <button type="button" class="chip" role="tab" :class="{ active: tab === 'run' }"
                 :aria-selected="tab === 'run' ? 'true' : 'false'" @click="tab = 'run'">
-            正在下载 <span class="num" x-text="tasks.length"></span>
+            正在下载 <span class="ui-mono" x-text="tasks.length"></span>
         </button>
-        <button type="button" role="tab" :class="{ active: tab === 'his' }"
+        <button type="button" class="chip" role="tab" :class="{ active: tab === 'his' }"
                 :aria-selected="tab === 'his' ? 'true' : 'false'" @click="tab = 'his'">
-            下载记录 <span class="num" x-text="allTotal"></span>
-            <span class="fail" x-show="failedCount > 0" x-text="failedCount + ' 失败'"></span>
+            下载记录 <span class="ui-mono" x-text="allTotal"></span>
+            <span class="ui-badge ui-badge-danger" x-show="failedCount > 0" x-text="failedCount + ' 失败'"></span>
         </button>
     </div>
 
@@ -87,7 +78,7 @@
         </div>
         <div class="list-card" x-show="tasks.length">
             <template x-for="t in tasks" :key="t.pk">
-                <div class="list-row hist-taskrow"
+                <div class="list-row is-compact hist-taskrow"
                      :class="{ 'hist-task-busy': taskLocked(t.pk), 'is-active': t.status === 'downloading' }">
                     <div class="list-main">
                         <div class="list-title">
@@ -181,7 +172,7 @@
     {# 4.3 记录列表：一行一条 #}
     <div class="list-card" x-show="songs.length">
         <template x-for="s in songs" :key="s.pk">
-            <div class="list-row hist-row">
+            <div class="list-row is-compact hist-row">
                 <label class="ui-check">
                     <input type="checkbox" :checked="checked.has(s.pk)"
                            @change="toggleCheck(s, $event.target.checked)"
@@ -269,7 +260,7 @@
                     <p class="hist-meta"><strong>歌曲：</strong>已选 <b class="ui-mono" x-text="deleting.ids.length"></b> 条记录</p>
                 </template>
                 <p class="hist-meta">涉及 <b class="ui-mono" x-text="deleting ? (deleting.ids ? deleting.ids.length : 1) : 0"></b> 条记录。</p>
-                <p class="hist-delwarn">删除记录后该歌曲可重新下载。选择「删除记录和文件」时，将同时删除本条记录对应的本地音乐文件；该歌曲的其他下载记录与文件会保留。</p>
+                <p class="hist-delwarn ui-badge-warning">删除记录后该歌曲可重新下载。选择「删除记录和文件」时，将同时删除本条记录对应的本地音乐文件；该歌曲的其他下载记录与文件会保留。</p>
             </div>
             <div class="ui-modal-footer">
                 {{ ui.btn('仅删记录', 'secondary', attrs={'@click': 'delSongRecordOnly()'}) }}

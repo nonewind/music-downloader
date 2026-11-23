@@ -48,3 +48,38 @@ def test_disabled_bindings_are_boolean():
                     line = text.count("\n", 0, m.start()) + 1
                     bad.append(f"{f.name}:{line}: {m.group(1)}")
     assert not bad, "以下 :disabled 可能得到 undefined→\"\"→禁用，请用 !!(...) 包裹：\n" + "\n".join(bad)
+
+
+# ----------------------------------------------------------------------
+# 下载页样式统一（v0.13.2.1「下载页控件和文字比其他页面大」）
+#
+# 下载页的两个标签曾自己写了一套分段按钮（写死颜色/阴影/间距），列表行用的是
+# 公共 list-row 的大号默认值（标题 17px），比音乐库的歌曲列表（15px）大一号。
+# 规则：标签用公共选项片 chip；列表行用紧凑行 is-compact；页面局部样式不写死颜色和阴影。
+# ----------------------------------------------------------------------
+def _history_html() -> str:
+    return (TEMPLATES / "history.html").read_text(encoding="utf-8")
+
+
+def test_history_tabs_use_shared_chip():
+    text = _history_html()
+    # 第 1 步：标签栏是公共的 chips，不再有自定义分段按钮
+    assert 'class="chips hist-tabs"' in text
+    assert "hist-seg" not in text
+    # 第 2 步：两个标签按钮都是 chip
+    assert text.count('class="chip" role="tab"') == 2
+
+
+def test_history_rows_are_compact():
+    text = _history_html()
+    rows = re.findall(r'class="list-row([^"]*)"', text)
+    assert rows, "下载页应有列表行"
+    assert all("is-compact" in r for r in rows), rows
+
+
+def test_history_style_has_no_hardcoded_colors():
+    text = _history_html()
+    style = text[text.index("<style>"):text.index("</style>")]
+    # 颜色和阴影只用 app.css 里的变量
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", style)
+    assert "rgba(" not in style and "rgb(" not in style

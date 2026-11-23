@@ -872,6 +872,12 @@ body.has-dlbar .app-dlbar {
 .list-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .list-state.is-on { color: var(--ui-primary); font-weight: 600; }
 
+/* 紧凑列表行：歌曲列表用（下载页两栏），字号和音乐库的歌曲列表一致 */
+.list-row.is-compact { min-height: 56px; gap: var(--ui-sp-3); padding: var(--ui-sp-2) var(--ui-sp-4); }
+.list-row.is-compact .list-title { font-size: 15px; }
+.list-row.is-compact .list-sub { font-size: 13px; }
+.list-row.is-compact .list-side { font-size: 13px; }
+
 /* 行内细进度条 */
 .list-prog { height: 4px; margin-top: 6px; border-radius: 2px; background: #d5e8e4; overflow: hidden; }
 .list-prog span { display: block; width: 0; height: 100%; background: var(--ui-primary); transition: width .4s ease; }
