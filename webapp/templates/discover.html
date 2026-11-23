@@ -25,14 +25,14 @@
         <span class="list-state is-on" x-show="rowState(s) === 'downloading'" x-text="'下载中 ' + rowPct(s) + '%'"></span>
         <span class="list-state" x-show="rowState(s) === 'pending'">排队中</span>
         <span class="list-state" x-show="rowState(s) === 'paused'">已暂停</span>
-        <button type="button" class="ui-btn ui-btn-danger" x-show="rowState(s) === 'failed'"
+        <button type="button" class="ui-btn ui-btn-danger ui-btn-sm" x-show="rowState(s) === 'failed'"
                 @click="downloadSong(s, {{ qualities }})">重试</button>
         <span class="list-state" x-show="rowState(s) === 'done'"><i class="bi bi-check2"></i> 已下载</span>
         <button type="button" class="ui-btn ui-btn-ghost ui-btn-icon ui-btn-sm" x-show="rowState(s) === 'done'"
                 title="重新下载" :aria-label="'重新下载 ' + s.name" @click="downloadSong(s, {{ qualities }})">
             <i class="bi bi-arrow-repeat"></i>
         </button>
-        <button type="button" class="ui-btn ui-btn-soft" x-show="rowState(s) === 'none'"
+        <button type="button" class="ui-btn ui-btn-soft ui-btn-sm" x-show="rowState(s) === 'none'"
                 :aria-label="'下载 ' + s.name" @click="downloadSong(s, {{ qualities }})">
             <i class="bi bi-download"></i><span class="hide-sm">下载</span>
         </button>
@@ -46,26 +46,26 @@
     .disc-searchbox { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 8px 0 20px; border: 1px solid var(--ui-border-strong); border-radius: 16px; background: var(--ui-surface); color: var(--ui-text-2); transition: border-color .15s, box-shadow .15s; }
     .disc-searchbox:focus-within { border-color: var(--ui-primary); box-shadow: 0 0 0 3px rgba(15, 118, 110, .15); }
     .disc-searchbox i { font-size: 20px; }
-    .disc-searchbox input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; font-size: 18px; color: var(--ui-text); }
+    .disc-searchbox input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; font-size: var(--ui-fs-2xl); color: var(--ui-text); }
     .disc-searchbox input::-webkit-search-cancel-button { display: none; }
     .disc-clear { width: 40px; height: 40px; border: 0; border-radius: 50%; background: transparent; color: var(--ui-text-2); font-size: 22px; line-height: 1; }
     .disc-clear:hover { background: var(--ui-bg); color: var(--ui-text); }
-    .disc-searchbtn { height: 56px; padding: 0 28px; border-radius: 16px; font-size: 17px; }
-    .disc-resulthead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 10px; font-size: 15px; color: var(--ui-text-2); }
-    .disc-album { flex: 0 1 240px; min-width: 0; font-size: 14px; color: var(--ui-text-2); }
+    .disc-searchbtn { height: 56px; padding: 0 28px; border-radius: 16px; font-size: var(--ui-fs-xl); }
+    .disc-resulthead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 10px; font-size: var(--ui-fs-base); color: var(--ui-text-2); }
+    .disc-album { flex: 0 1 240px; min-width: 0; font-size: var(--ui-fs-m); color: var(--ui-text-2); }
 
     /* 我的歌单行：右侧是数量、开关、同步、取关；手机上换到第二行 */
-    .disc-pllimit { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ui-text-2); white-space: nowrap; }
+    .disc-pllimit { display: inline-flex; align-items: center; gap: 6px; font-size: var(--ui-fs-m); color: var(--ui-text-2); white-space: nowrap; }
     .disc-pllimit .ui-input { width: 76px; height: 36px; text-align: center; }
-    .disc-hint { padding: 20px; font-size: 15px; color: var(--ui-text-2); }
+    .disc-hint { padding: 20px; font-size: var(--ui-fs-base); color: var(--ui-text-2); }
 
     /* 榜单 / 热门歌单封面卡 */
     .disc-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
     .disc-card { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
     .disc-cover { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: var(--ui-r-m); background: #e4e4de; }
     .disc-cover-ph { display: flex; align-items: center; justify-content: center; aspect-ratio: 1 / 1; border-radius: var(--ui-r-m); font-size: 32px; color: var(--ui-text-3); background: #e4e4de; }
-    .disc-cardtitle { font-size: 15px; font-weight: 600; }
-    .disc-cardmeta { font-size: 13px; color: var(--ui-text-2); }
+    .disc-cardtitle { font-size: var(--ui-fs-base); font-weight: 600; }
+    .disc-cardmeta { font-size: var(--ui-fs-s); color: var(--ui-text-2); }
     .disc-card .ui-btn { width: 100%; }
     /* 封面按钮：点开歌曲列表；非歌曲榜禁用（不可点、不变手型） */
     .disc-coverbtn { display: block; width: 100%; padding: 0; border: 0; background: none; border-radius: var(--ui-r-m); cursor: pointer; transition: opacity .15s, transform .08s; }
@@ -81,25 +81,25 @@
     .disc-dhead .ui-btn { flex-shrink: 0; }
     .disc-dlist { max-height: 60vh; overflow-y: auto; }
     .disc-dlist .list-card { border: 0; border-radius: 0; }
-    .disc-loading { padding: 12px 0; font-size: 15px; color: var(--ui-text-2); }
+    .disc-loading { padding: 12px 0; font-size: var(--ui-fs-base); color: var(--ui-text-2); }
     .disc-filterrow { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; }
-    .disc-filterrow label { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--ui-text-2); white-space: nowrap; }
+    .disc-filterrow label { display: flex; align-items: center; gap: 6px; font-size: var(--ui-fs-m); color: var(--ui-text-2); white-space: nowrap; }
     .disc-caret { transition: transform .15s; }
     .disc-caret.open { transform: rotate(180deg); }
-    .disc-pageinfo { margin-top: 8px; font-size: 13px; text-align: center; color: var(--ui-text-2); }
-    .disc-label { display: block; margin-bottom: 14px; font-size: 15px; color: var(--ui-text); }
+    .disc-pageinfo { margin-top: 8px; font-size: var(--ui-fs-s); text-align: center; color: var(--ui-text-2); }
+    .disc-label { display: block; margin-bottom: 14px; font-size: var(--ui-fs-base); color: var(--ui-text); }
     .disc-label .ui-select, .disc-label .ui-input { display: block; width: 100%; margin-top: 6px; }
-    .disc-formhint { margin: -8px 0 14px; font-size: 13px; color: var(--ui-text-2); }
+    .disc-formhint { margin: -8px 0 14px; font-size: var(--ui-fs-s); color: var(--ui-text-2); }
 
     @media (max-width: 767.98px) {
         .disc-searchbox { height: 52px; padding-left: 16px; border-radius: 14px; }
-        .disc-searchbox input { font-size: 17px; }
+        .disc-searchbox input { font-size: var(--ui-fs-xl); }
         .disc-album { display: none; }
         .disc-plrow { flex-wrap: wrap; }
         .disc-plrow .list-main { flex-basis: 100%; }
         .disc-plrow .list-side { flex: 1; justify-content: space-between; }
         .disc-cards { grid-template-columns: repeat(3, 1fr); gap: 12px; }
-        .disc-cardtitle { font-size: 14px; }
+        .disc-cardtitle { font-size: var(--ui-fs-m); }
     }
 </style>
 
@@ -168,7 +168,7 @@
                     <div class="list-side">
                         <span class="ui-spinner" x-show="a.busy"></span>
                         <span class="list-state" x-show="!a.busy && a.queued"><i class="bi bi-check2"></i> 已加入下载</span>
-                        <button type="button" class="ui-btn ui-btn-soft" x-show="!a.busy && !a.queued"
+                        <button type="button" class="ui-btn ui-btn-soft ui-btn-sm" x-show="!a.busy && !a.queued"
                                 :aria-label="'下载专辑 ' + a.name" @click="downloadAlbum(a)">
                             <i class="bi bi-cloud-arrow-down"></i><span class="hide-sm">下载专辑</span>
                         </button>

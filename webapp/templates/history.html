@@ -6,31 +6,31 @@
 <style>
     /* 下载页局部样式（hist- 前缀；通用积木 list-/chip/sec- 在 app.css） */
     .hist-task-busy { opacity: .6; }
-    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ui-sp-2); padding: var(--ui-sp-3) var(--ui-sp-5); margin-bottom: var(--ui-sp-4); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: 15px; font-weight: 600; }
+    .hist-retrybar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--ui-sp-2); padding: var(--ui-sp-3) var(--ui-sp-5); margin-bottom: var(--ui-sp-4); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-l); background: var(--ui-danger-soft); color: var(--ui-danger); font-size: var(--ui-fs-base); font-weight: 600; }
     .hist-filter { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2); margin-bottom: var(--ui-sp-3); }
     .hist-filter .ui-input { flex: 1 1 200px; min-width: 0; max-width: 320px; }
-    .hist-batchbar { display: flex; align-items: center; gap: var(--ui-sp-2); min-height: 44px; margin-bottom: var(--ui-sp-1); padding-left: var(--ui-sp-3); font-size: 14px; color: var(--ui-text-2); }
+    .hist-batchbar { display: flex; align-items: center; gap: var(--ui-sp-2); min-height: 44px; margin-bottom: var(--ui-sp-1); padding-left: var(--ui-sp-3); font-size: var(--ui-fs-m); color: var(--ui-text-2); }
     .hist-batchbar .ui-btn { margin-left: auto; }
     .list-row.hist-row { padding-left: var(--ui-sp-3); }
-    .hist-metaline { font-size: 13px; color: var(--ui-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .hist-filestate { font-size: 12px; line-height: 18px; padding: 0 8px; }
-    .hist-failbtn { font: inherit; font-size: 13px; font-weight: 500; border: 0; cursor: pointer; }
-    .hist-meta { margin: 0 0 8px; font-size: 15px; }
-    .hist-delwarn { margin: 0; padding: var(--ui-sp-2) var(--ui-sp-3); font-size: 14px; border-radius: var(--ui-r-s); }
+    .hist-metaline { font-size: var(--ui-fs-s); color: var(--ui-text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hist-filestate { font-size: var(--ui-fs-xs); line-height: 18px; padding: 0 8px; }
+    .hist-failbtn { font: inherit; font-size: var(--ui-fs-s); font-weight: 500; border: 0; cursor: pointer; }
+    .hist-meta { margin: 0 0 8px; font-size: var(--ui-fs-base); }
+    .hist-delwarn { margin: 0; padding: var(--ui-sp-2) var(--ui-sp-3); font-size: var(--ui-fs-m); border-radius: var(--ui-r-s); }
     .hist-upmodal { width: 860px; }
-    .hist-upbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 14px; }
+    .hist-upbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; font-size: var(--ui-fs-m); }
     .hist-upbar label { display: flex; align-items: center; gap: 6px; color: var(--ui-text-2); }
-    .hist-uprecent { margin-left: auto; font-size: 13px; color: var(--ui-text-2); }
-    .hist-upbatch { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 14px; color: var(--ui-text-2); }
+    .hist-uprecent { margin-left: auto; font-size: var(--ui-fs-s); color: var(--ui-text-2); }
+    .hist-upbatch { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: var(--ui-fs-m); color: var(--ui-text-2); }
     .hist-uplist { max-height: 46vh; overflow: auto; border: 1px solid var(--ui-border); border-radius: var(--ui-r-s); }
     .hist-uplist .ui-table th { position: sticky; top: 0; z-index: 1; }
     .hist-uplist .ui-table td { white-space: nowrap; }
     .hist-songname { display: block; max-width: 260px; }
-    .hist-uphint { margin: 10px 0 0; font-size: 13px; color: var(--ui-text-2); }
-    .hist-upfoot { flex: 1; align-self: center; font-size: 13px; color: var(--ui-text-2); }
+    .hist-uphint { margin: 10px 0 0; font-size: var(--ui-fs-s); color: var(--ui-text-2); }
+    .hist-upfoot { flex: 1; align-self: center; font-size: var(--ui-fs-s); color: var(--ui-text-2); }
     .hist-upfoot.is-over { color: var(--ui-danger); }
     .hist-tabs { margin-bottom: var(--ui-sp-4); }
-    .hist-sum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2) var(--ui-sp-4); margin: 0 0 var(--ui-sp-3); font-size: 14px; color: var(--ui-text-2); }
+    .hist-sum { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ui-sp-2) var(--ui-sp-4); margin: 0 0 var(--ui-sp-3); font-size: var(--ui-fs-m); color: var(--ui-text-2); }
     .hist-sum b { color: var(--ui-text); font-variant-numeric: tabular-nums; }
     .hist-failreason { margin: 0; padding: 10px 12px; color: var(--ui-text); background: var(--ui-danger-soft); border: 1px solid var(--ui-danger-border); border-radius: var(--ui-r-s); white-space: pre-wrap; word-break: break-all; }
     @media (max-width: 767.98px) {
@@ -78,7 +78,7 @@
         </div>
         <div class="list-card" x-show="tasks.length">
             <template x-for="t in tasks" :key="t.pk">
-                <div class="list-row is-compact hist-taskrow"
+                <div class="list-row hist-taskrow"
                      :class="{ 'hist-task-busy': taskLocked(t.pk), 'is-active': t.status === 'downloading' }">
                     <div class="list-main">
                         <div class="list-title">
@@ -172,7 +172,7 @@
     {# 4.3 记录列表：一行一条 #}
     <div class="list-card" x-show="songs.length">
         <template x-for="s in songs" :key="s.pk">
-            <div class="list-row is-compact hist-row">
+            <div class="list-row hist-row">
                 <label class="ui-check">
                     <input type="checkbox" :checked="checked.has(s.pk)"
                            @change="toggleCheck(s, $event.target.checked)"

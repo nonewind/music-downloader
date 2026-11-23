@@ -48,6 +48,18 @@
     --ui-sp-6: 24px;
     --ui-sp-8: 32px;
 
+    /* 字号：页面里的文字只用这几档（图标大小不算） */
+    --ui-fs-2xs: 11px;   /* 角标 */
+    --ui-fs-xs: 12px;    /* 小徽标、版本号 */
+    --ui-fs-s: 13px;     /* 次要信息：列表第二行、计数、说明小字 */
+    --ui-fs-m: 14px;     /* 说明文字、小按钮 */
+    --ui-fs-base: 15px;  /* 正文：列表标题、按钮、输入框 */
+    --ui-fs-l: 16px;     /* 顶部导航、卡片标题 */
+    --ui-fs-xl: 17px;    /* 品牌名、弹窗标题 */
+    --ui-fs-2xl: 18px;   /* 分区标题 */
+    --ui-fs-3xl: 20px;   /* 详情标题 */
+    --ui-fs-page: 26px;  /* 页面标题（手机 24px，见下方媒体查询） */
+
     /* 圆角 */
     --ui-r-s: 10px;
     --ui-r-m: 14px;
@@ -80,7 +92,7 @@ html { -webkit-text-size-adjust: 100%; }
 body {
     margin: 0;
     font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "微软雅黑", sans-serif;
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
     line-height: 1.5;
     color: var(--ui-text);
     background-color: var(--ui-bg);
@@ -109,7 +121,7 @@ hr {
     background: #fdf3e2;
     border-bottom: 1px solid #f0cf9a;
     color: var(--ui-warning);
-    font-size: 13px;
+    font-size: var(--ui-fs-s);
     text-align: center;
 }
 
@@ -138,13 +150,13 @@ hr {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 17px;
+    font-size: var(--ui-fs-xl);
     font-weight: 700;
     white-space: nowrap;
 }
 
 .app-brand i { color: var(--ui-primary); font-size: 20px; }
-.app-brand small { font-weight: 400; font-size: 12px; color: var(--ui-text-3); }
+.app-brand small { font-weight: 400; font-size: var(--ui-fs-xs); color: var(--ui-text-3); }
 
 .app-tabs {
     display: flex;
@@ -159,7 +171,7 @@ hr {
     align-items: center;
     gap: 6px;
     padding: 0 16px;
-    font-size: 16px;
+    font-size: var(--ui-fs-l);
     color: var(--ui-text-2);
     white-space: nowrap;
     transition: color .15s;
@@ -180,7 +192,7 @@ hr {
     border-radius: 10px;
     background: var(--ui-danger-soft);
     color: var(--ui-danger);
-    font-size: 12px;
+    font-size: var(--ui-fs-xs);
     font-weight: 700;
     line-height: 18px;
 }
@@ -204,7 +216,7 @@ hr {
         justify-content: center;
         gap: 3px;
         padding: 0;
-        font-size: 12px;
+        font-size: var(--ui-fs-xs);
     }
     .app-tab i { display: block; font-size: 22px; line-height: 1; }
     .app-tab.active { box-shadow: none; }
@@ -213,7 +225,7 @@ hr {
         top: 6px;
         left: calc(50% + 6px);
         padding: 0 6px;
-        font-size: 11px;
+        font-size: var(--ui-fs-2xs);
         line-height: 16px;
     }
     .app-tab-badge .app-tab-badge-word { display: none; }
@@ -270,7 +282,7 @@ body.has-dlbar .app-dlbar {
     align-items: center;
     justify-content: space-between;
     gap: 16px;
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
 }
 
 /* 左边整批进度很短，不让它被挤；右边歌名太长时省略号截断 */
@@ -314,7 +326,7 @@ body.has-dlbar .app-dlbar {
     padding: 0 18px;
     border: 1px solid transparent;
     border-radius: 22px;
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
     font-weight: 600;
     line-height: 1;
     white-space: nowrap;
@@ -383,7 +395,7 @@ body.has-dlbar .app-dlbar {
 .ui-btn-sm {
     height: 36px;
     padding: 0 14px;
-    font-size: 14px;
+    font-size: var(--ui-fs-m);
 }
 
 /* 只有图标的圆按钮 */
@@ -400,7 +412,7 @@ body.has-dlbar .app-dlbar {
     border-radius: var(--ui-r-s);
     background: var(--ui-surface);
     color: var(--ui-text);
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
     transition: border-color .15s, box-shadow .15s;
 }
 
@@ -436,7 +448,7 @@ body.has-dlbar .app-dlbar {
     gap: 4px;
     padding: 2px 10px;
     border-radius: 999px;
-    font-size: 13px;
+    font-size: var(--ui-fs-s);
     font-weight: 500;
     line-height: 20px;
     white-space: nowrap;
@@ -456,7 +468,7 @@ body.has-dlbar .app-dlbar {
 .ui-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 14px;
+    font-size: var(--ui-fs-m);
     color: var(--ui-text);
     background: var(--ui-surface);
 }
@@ -472,7 +484,7 @@ body.has-dlbar .app-dlbar {
 .ui-table thead th {
     background: var(--ui-bg);
     color: var(--ui-text-2);
-    font-size: 13px;
+    font-size: var(--ui-fs-s);
     font-weight: 600;
     white-space: nowrap;
 }
@@ -513,7 +525,7 @@ body.has-dlbar .app-dlbar {
 }
 
 .ui-empty i { font-size: 40px; line-height: 1; color: var(--ui-border-strong); }
-.ui-empty-text { font-size: 15px; }
+.ui-empty-text { font-size: var(--ui-fs-base); }
 
 /* ---------- 模态框（手机上从底部升起，占满宽度） ---------- */
 .ui-modal-mask {
@@ -573,7 +585,7 @@ body.has-dlbar .app-dlbar {
     border-bottom: 1px solid var(--ui-border);
 }
 
-.ui-modal-header h3 { margin: 0; font-size: 17px; font-weight: 700; color: var(--ui-text); }
+.ui-modal-header h3 { margin: 0; font-size: var(--ui-fs-xl); font-weight: 700; color: var(--ui-text); }
 
 .ui-modal-close {
     width: 36px;
@@ -591,7 +603,7 @@ body.has-dlbar .app-dlbar {
 
 .ui-modal-body {
     padding: var(--ui-sp-5);
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
     color: var(--ui-text);
     word-break: break-word;
 }
@@ -644,7 +656,7 @@ body.has-dlbar .app-dlbar {
     color: #fff;
     border-radius: var(--ui-r-m);
     box-shadow: var(--ui-shadow-2);
-    font-size: 14px;
+    font-size: var(--ui-fs-m);
     pointer-events: auto;
     opacity: 0;
     transform: translateY(-16px) scale(.96);
@@ -687,7 +699,7 @@ body.has-dlbar .app-dlbar {
     margin: var(--ui-sp-4) 0 0;
     padding: 0;
     list-style: none;
-    font-size: 14px;
+    font-size: var(--ui-fs-m);
 }
 
 .ui-pagination li { display: inline-flex; }
@@ -786,8 +798,8 @@ body.has-dlbar .app-dlbar {
     margin-bottom: 16px;
 }
 
-.page-title { font-size: 26px; font-weight: 700; line-height: 1.2; }
-.page-desc { margin-top: 4px; font-size: 14px; color: var(--ui-text-2); }
+.page-title { font-size: var(--ui-fs-page); font-weight: 700; line-height: 1.2; }
+.page-desc { margin-top: 4px; font-size: var(--ui-fs-m); color: var(--ui-text-2); }
 .page-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 
 /* 小节标题 */
@@ -799,7 +811,7 @@ body.has-dlbar .app-dlbar {
     margin: 28px 0 10px;
 }
 
-.sec-title { font-size: 18px; font-weight: 700; }
+.sec-title { font-size: var(--ui-fs-2xl); font-weight: 700; }
 
 /* 文字按钮（小节标题右侧的轻操作） */
 .link-btn {
@@ -811,7 +823,7 @@ body.has-dlbar .app-dlbar {
     border: 0;
     background: transparent;
     color: var(--ui-primary);
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
     font-weight: 600;
 }
 
@@ -831,7 +843,7 @@ body.has-dlbar .app-dlbar {
     border-radius: 22px;
     background: var(--ui-surface);
     color: var(--ui-text);
-    font-size: 15px;
+    font-size: var(--ui-fs-base);
     white-space: nowrap;
     transition: background-color .15s, border-color .15s, color .15s, transform .08s;
 }
@@ -853,9 +865,9 @@ body.has-dlbar .app-dlbar {
 .list-row {
     display: flex;
     align-items: center;
-    gap: 14px;
-    min-height: 68px;
-    padding: 12px 20px;
+    gap: var(--ui-sp-3);
+    min-height: 56px;
+    padding: var(--ui-sp-2) var(--ui-sp-4);
     border-bottom: 1px solid #eeeee9;
     transition: background-color .15s;
 }
@@ -864,26 +876,20 @@ body.has-dlbar .app-dlbar {
 .list-row.is-active { background: var(--ui-primary-softer); }
 
 .list-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.list-title { display: flex; align-items: center; gap: 8px; font-size: 17px; font-weight: 600; min-width: 0; }
+.list-title { display: flex; align-items: center; gap: 8px; font-size: var(--ui-fs-base); font-weight: 600; min-width: 0; }
 .list-title > .ui-truncate { flex: 0 1 auto; }
-.list-sub { font-size: 14px; color: var(--ui-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-sub { font-size: var(--ui-fs-s); color: var(--ui-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-sub.is-fail { color: var(--ui-danger); }
-.list-side { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; font-size: 15px; color: var(--ui-text-2); }
+.list-side { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-shrink: 0; font-size: var(--ui-fs-s); color: var(--ui-text-2); }
 .list-state { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .list-state.is-on { color: var(--ui-primary); font-weight: 600; }
-
-/* 紧凑列表行：歌曲列表用（下载页两栏），字号和音乐库的歌曲列表一致 */
-.list-row.is-compact { min-height: 56px; gap: var(--ui-sp-3); padding: var(--ui-sp-2) var(--ui-sp-4); }
-.list-row.is-compact .list-title { font-size: 15px; }
-.list-row.is-compact .list-sub { font-size: 13px; }
-.list-row.is-compact .list-side { font-size: 13px; }
 
 /* 行内细进度条 */
 .list-prog { height: 4px; margin-top: 6px; border-radius: 2px; background: #d5e8e4; overflow: hidden; }
 .list-prog span { display: block; width: 0; height: 100%; background: var(--ui-primary); transition: width .4s ease; }
 
 /* VIP 小标 */
-.tag-vip { flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: #f3e9d2; color: #7a5200; font-size: 11px; font-weight: 700; line-height: 16px; }
+.tag-vip { flex-shrink: 0; padding: 1px 6px; border-radius: 4px; background: #f3e9d2; color: #7a5200; font-size: var(--ui-fs-2xs); font-weight: 700; line-height: 16px; }
 
 /* ---------- 动效 ---------- */
 /* 列表逐行出现：父元素加 ui-stagger，刚出现的行上浮淡入，前 12 行依次
@@ -937,9 +943,7 @@ body.has-dlbar .app-dlbar {
 }
 
 @media (max-width: 767.98px) {
-    .page-title { font-size: 24px; }
-    .list-row { padding: 10px 16px; min-height: 64px; gap: 12px; }
-    .list-sub { font-size: 13px; }
+    :root { --ui-fs-page: 24px; }
     .chip { padding: 0 16px; }
     /* 手机上隐藏的次要内容 / 按钮文字 */
     .hide-sm { display: none !important; }
