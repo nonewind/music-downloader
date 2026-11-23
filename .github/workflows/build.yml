@@ -170,6 +170,24 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      # 发布说明取 docs/CHANGELOG.md 里这个版本的一节（标签 v0.13.1.0 → 「## 0.13.1.0（…）」）；
+      # 找不到这一节直接失败，免得发出没写更新内容的版本
+      - name: Extract release notes from CHANGELOG
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          awk -v ver="$ver" '
+            index($0, "## " ver "（") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' docs/CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "ERROR: docs/CHANGELOG.md 里没有 ## ${ver}（…）这一节"
+            exit 1
+          fi
+          cat release-notes.md
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -185,6 +203,7 @@ jobs:
           files: |
             artifacts/deen-music-downloader-win-x64/deen-music-downloader-*-win-x64.zip
             artifacts/deen-music-downloader-linux-x64/deen-music-downloader-*-linux-x64.zip
+          body_path: release-notes.md
           generate_release_notes: true
 
       # fpk 单独上传：softprops 的 files glob 失配时仅打 warning 不报错，
