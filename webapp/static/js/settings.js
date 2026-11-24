@@ -56,7 +56,7 @@ function settingsPage() {
         serviceList: SERVICE_DEFS,
         form: {},                 // loadSettings() 全量回填
         // 访问令牌（不进 form/全量 payload：独立接口保存，后端永不回显明文）
-        tokenState: { enabled: false, fromEnv: false, input: "", busy: false },
+        tokenState: { enabled: false, fromEnv: false, input: "", busy: false, shown: false, saved: "" },
         loading: true,
         saving: false,
         section: "accounts",      // 当前分类（hash 记忆，刷新/直达不丢）；账号栏是独立组件 accountsPage
@@ -230,6 +230,80 @@ function settingsPage() {
             };
         },
 
+        generateToken() {
+            // 步骤 1：用浏览器的安全随机数生成 16 字节，转成 32 位十六进制
+            const bytes = new Uint8Array(16);
+            crypto.getRandomValues(bytes);
+            let token = "";
+            for (const b of bytes) {
+                token += b.toString(16).padStart(2, "0");
+            }
+            // 步骤 2：填进输入框并显示出来，由用户点「设置」保存
+            this.tokenState.input = token;
+            this.tokenState.shown = true;
+        },
+
+        async copyMcpSkill() {
+            // 步骤 1：算出 MCP 地址（格式同服务端 parse_web_bind）；监听所有网卡时用当前访问的主机名
+            const bind = String(this.form.mcp_port || "").trim();
+            const sep = bind.lastIndexOf(":");
+            let host = "";
+            let port = bind;
+            if (sep >= 0) {
+                host = bind.slice(0, sep);
+                port = bind.slice(sep + 1);
+            }
+            if (host === "" || host === "*" || host === "0.0.0.0") {
+                host = location.hostname;
+            }
+            const url = `http://${host}:${port}/mcp`;
+
+            // 步骤 2：令牌只有本页刚设置过才知道，否则留占位让用户自己填
+            const token = this.tokenState.saved || "这里换成你的访问令牌";
+
+            // 步骤 3：拼出 SKILL 文本，使用说明和 MCP 连接时发给 AI 的是同一份
+            const text = [
+                "---",
+                "name: music-downloader",
+                "description: 管理家里的音乐下载器：搜歌下载、看下载进度和失败原因、看账号、同步歌单、浏览音乐库",
+                "---",
+                "",
+                "# 音乐下载器",
+                "",
+                "## 连接",
+                "",
+                `- MCP 地址：${url}（Streamable HTTP）`,
+                `- 请求头：Authorization: Bearer ${token}`,
+                "",
+                "## 用法",
+                "",
+                window._MCP_GUIDE,
+            ].join("\n");
+
+            // 步骤 4：复制；局域网 http 页面没有剪贴板接口，改用旧的复制方式
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const box = document.createElement("textarea");
+                    box.value = text;
+                    document.body.appendChild(box);
+                    box.select();
+                    const ok = document.execCommand("copy");
+                    box.remove();
+                    if (!ok) throw new Error("浏览器不允许复制");
+                }
+            } catch (e) {
+                showToast("复制失败：" + e.message, "错误", "error");
+                return;
+            }
+            if (this.tokenState.saved) {
+                showToast("已复制", "成功", "success");
+            } else {
+                showToast("已复制。令牌没填进去，请在文本里换成你的访问令牌", "提示", "warning");
+            }
+        },
+
         async saveAccessToken(clear = false) {
             if (this.tokenState.busy) return;
             const token = clear ? "" : String(this.tokenState.input || "").trim();
@@ -242,7 +316,10 @@ function settingsPage() {
                 });
                 showToast(data.msg, "成功", "success");
                 this.tokenState.input = "";
+                this.tokenState.shown = false;
                 this.tokenState.enabled = !!token;
+                // 服务端不回显令牌，记在页面里给「复制 SKILL」用（刷新页面就没了）
+                this.tokenState.saved = token;
             } catch (e) {
                 showToast(e.message, "错误", "error");
             } finally {

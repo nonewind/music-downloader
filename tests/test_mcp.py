@@ -246,3 +246,28 @@ def test_mcp_port_setting_is_trusted_only(make_app):
     assert resp.status_code == 200
     assert "MCP 端口修改需重启服务生效" in resp.get_json()["msg"]
     assert Setting.get("mcp_port") == "*:45604"
+
+
+# ----------------------------------------------------------------------
+# 使用说明
+# ----------------------------------------------------------------------
+def test_initialize_sends_usage_guide(make_app):
+    from routes.mcp import TOOLS, USAGE_GUIDE
+    c = make_app().test_client()
+    body = _rpc(c, "initialize", {"protocolVersion": "2025-06-18"}).get_json()
+    assert body["result"]["instructions"] == USAGE_GUIDE
+    # 说明里每个工具都讲到了
+    for t in TOOLS:
+        assert t["name"] in USAGE_GUIDE, t["name"]
+
+
+def test_settings_page_gets_usage_guide(make_app, monkeypatch):
+    """设置页「复制 SKILL」用的说明和 MCP 发给 AI 的是同一份"""
+    import routes.views as views
+    from routes.mcp import USAGE_GUIDE
+    seen = {}
+    monkeypatch.setattr(views, "render_template", lambda name, **kw: seen.update(kw) or "")
+    app = make_app()
+    app.register_blueprint(views.views_bp)
+    assert app.test_client().get("/settings").status_code == 200
+    assert seen["mcp_guide"] == USAGE_GUIDE

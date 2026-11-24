@@ -324,8 +324,11 @@
                             </div>
                             <div class="set-field">
                                 <label class="set-label">MCP 端口</label>
-                                <input type="text" class="ui-input set-input" x-model="form.mcp_port" placeholder="留空表示关闭，如 *:45604">
-                                <div class="set-hint">给 dsh 等 AI 工具连接用，地址为 http://本机地址:端口/mcp；格式同上；需先设置下方访问令牌，连接时带请求头 Authorization: Bearer 令牌；修改后需重启服务生效</div>
+                                <div class="set-inline">
+                                    <input type="text" class="ui-input" x-model="form.mcp_port" placeholder="留空表示关闭，如 *:45604">
+                                    <button type="button" class="ui-btn" :disabled="!form.mcp_port" @click="copyMcpSkill()">复制 SKILL</button>
+                                </div>
+                                <div class="set-hint">给 dsh 等 AI 工具连接用，地址为 http://本机地址:端口/mcp；格式同上；需先设置下方访问令牌，连接时带请求头 Authorization: Bearer 令牌；修改后需重启服务生效。「复制 SKILL」复制一份给 AI 看的使用说明，含地址和令牌，粘贴到 AI 工具里即可</div>
                             </div>
                             <div class="set-field">
                                 <label class="set-label">访问令牌
@@ -333,7 +336,8 @@
                                 </label>
                                 <template x-if="!tokenState.fromEnv">
                                     <div class="set-inline">
-                                        <input type="password" class="ui-input" x-model="tokenState.input" placeholder="至少 8 个字符" autocomplete="new-password">
+                                        <input :type="tokenState.shown ? 'text' : 'password'" class="ui-input" x-model="tokenState.input" placeholder="至少 8 个字符" autocomplete="new-password">
+                                        <button type="button" class="ui-btn" :disabled="!!tokenState.busy" @click="generateToken()">生成</button>
                                         <button type="button" class="ui-btn ui-btn-primary" :disabled="!!(tokenState.busy || !tokenState.input)" @click="saveAccessToken(false)">设置</button>
                                         <button type="button" class="ui-btn" x-show="tokenState.enabled" :disabled="!!tokenState.busy" @click="saveAccessToken(true)">关闭</button>
                                     </div>
@@ -602,6 +606,9 @@
 {% endblock %}
 
 {% block scripts %}
+<script>
+window._MCP_GUIDE = {{ mcp_guide | tojson | safe }};
+</script>
 <script src="{{ static_v('js/accounts.js') }}"></script>
 <script src="{{ static_v('js/settings.js') }}"></script>
 {% endblock %}

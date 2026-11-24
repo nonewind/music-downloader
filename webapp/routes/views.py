@@ -12,6 +12,7 @@ Frontend 3.0 起页面收成 4 个：找歌（首页，含我的歌单）/ 下�
 from flask import Blueprint, jsonify, redirect, render_template, url_for
 
 from models import PLATFORM_NAMES
+from routes.mcp import USAGE_GUIDE
 
 views_bp = Blueprint("views", __name__)
 
@@ -51,8 +52,8 @@ def organize():
 
 @views_bp.route("/settings")
 def settings():
-    """设置页（含账号）"""
-    return render_template("settings.html", active_page="settings")
+    """设置页（含账号）；mcp_guide 给「复制 SKILL」按钮用"""
+    return render_template("settings.html", active_page="settings", mcp_guide=USAGE_GUIDE)
 
 
 # ======================================================================

@@ -195,6 +195,29 @@ TOOLS = [
 
 _TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
 
+# ----------------------------------------------------------------------
+# 使用说明：initialize 时作为 instructions 发给 AI；设置页「复制 SKILL」也用这一份
+# ----------------------------------------------------------------------
+USAGE_GUIDE = """\
+这是一台家用音乐下载器，能从网易云、QQ音乐、酷狗音乐下载歌曲，下好的歌自动整理进音乐库。
+
+常见做法：
+1. 下载一首歌：先 search_songs 搜，挑出用户要的那首（核对歌名和歌手），再 download_song：结果里的 id 填 song_id，name、artists、fee 原样传，平台和搜索时一致。downloaded 为 true 表示已经下过，除非用户要求重下，否则告诉用户已有即可。
+2. 下载整张专辑：search_songs 时传 type=album，找到专辑后 download_album。
+3. 用户给的是链接或分享文案：直接 add_link，不用先搜。
+4. 看下载进度：list_downloading。要让某首先下、暂停或继续，用 control_task，task_id 填那首歌的 pk。
+5. 下载失败：list_history 传 status=failed，error_msg 是失败原因，先把原因告诉用户；能重试的用 retry_failed。
+6. 账号：list_accounts 看会员和额度；它不代表账号现在还能用，要确认就用 test_account 实测。账号失效需要用户自己在网页的设置页重新登录。
+7. 歌单：list_playlists 看已关注的歌单，sync_playlist 立即同步。
+8. 音乐库：library_artists 看有哪些歌手和专辑，library_album 看一张专辑里的歌。
+
+平台：用户说 QQ 音乐用 qq，说酷狗用 kugou，没说就用 netease。
+
+做不到的事：删歌、移动文件、改专辑信息、改设置、加或改账号。用户要做这些时，请用户到网页上操作。
+
+工具返回 isError 时，把 msg 里的原因照实告诉用户，不要自己编原因。
+"""
+
 
 class ToolArgError(Exception):
     """工具参数不对（回给 AI 看，让它改了再调）"""
@@ -341,8 +364,7 @@ def mcp_post():
             "protocolVersion": version,
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "deen-music-downloader", "version": get_version()},
-            "instructions": "音乐下载器：可以搜歌、下载单曲和专辑、用链接添加、看下载进度和记录、"
-                            "重试失败、看和测试账号、同步歌单、浏览音乐库。",
+            "instructions": USAGE_GUIDE,
         })
     elif method == "ping":
         return _rpc_result(msg_id, {})
