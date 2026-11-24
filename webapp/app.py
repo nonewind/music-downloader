@@ -63,7 +63,7 @@ def _parse_data_dir_arg(argv=None):
 from flask import Flask, request
 
 from models import init_db, Setting, default_web_port
-from access import (init_access_control, is_public_bind, parse_web_bind,
+from access import (MCP_PORT_FLAG, init_access_control, is_public_bind, parse_web_bind,
                     get_access_token)
 from task_manager import TaskManager
 from organizer_manager import OrganizerManager
@@ -71,6 +71,7 @@ from core.providers.kugou import bridge as kugou_bridge
 from core.providers.netease import bridge
 from core.providers.qq import bridge as qq_bridge
 from routes.api import api_bp
+from routes.mcp import mcp_bp
 from routes.views import views_bp
 from version import get_version
 
@@ -153,6 +154,7 @@ init_access_control(app, gateway_mode=bool(GATEWAY_SOCKET))
 # 注册蓝图
 app.register_blueprint(views_bp)
 app.register_blueprint(api_bp, url_prefix="/api")
+app.register_blueprint(mcp_bp, url_prefix="/mcp")
 
 # 初始化任务管理器
 task_manager = TaskManager(app)
@@ -228,6 +230,47 @@ class PrefixMiddleware:
             environ["SCRIPT_NAME"] = self.prefix
             environ["PATH_INFO"] = path[len(self.prefix):] or "/"
         return self.app(environ, start_response)
+
+
+class McpPortMiddleware:
+    """MCP 端口专用：只放行 /mcp，并打上标记让访问控制强制校验令牌"""
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        if environ.get("PATH_INFO", "") != "/mcp":
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"not found"]
+        environ[MCP_PORT_FLAG] = True
+        return self.app(environ, start_response)
+
+
+def start_mcp_port(app, raw: str) -> None:
+    """按设置项 mcp_port 另开一个只服务 /mcp 的端口（后台线程）
+
+    飞牛网关模式下程序只听 Unix Socket，dsh 等 AI 工具连不进来，靠这个端口连。
+    空串表示关闭；没设访问令牌时不开（这个端口不经过飞牛网关的登录）。
+    """
+    # 步骤 1：没配置 / 没令牌就不开
+    if not raw:
+        return
+    with app.app_context():
+        has_token = bool(get_access_token())
+    if not has_token:
+        logger.warning("MCP 端口未开启：需要先设置访问令牌（mcp_port=%s）", raw)
+        return
+    # 步骤 2：绑定端口（端口被占用等只记警告，不影响主服务）
+    from werkzeug.serving import make_server
+    host, port = parse_web_bind(raw)
+    try:
+        srv = make_server(host, port, McpPortMiddleware(app), threaded=True)
+    except OSError as e:
+        logger.warning("MCP 端口 %s:%d 开启失败: %s", host, port, e)
+        return
+    # 步骤 3：后台线程服务
+    threading.Thread(target=srv.serve_forever, name="mcp-port", daemon=True).start()
+    logger.info("MCP 端口已开启: http://%s:%d/mcp（需带访问令牌）", host, port)
 
 
 def serve(app, gateway_socket, gateway_prefix, host, port) -> None:
@@ -320,6 +363,9 @@ def main() -> None:
     logger.info("API 服务转后台启动，Web 服务先行就绪")
     task_manager.start()
     organizer_manager.start()
+    with app.app_context():
+        mcp_raw = str(Setting.get("mcp_port", "")).strip()
+    start_mcp_port(app, mcp_raw)
     logger.info("=" * 50)
     logger.info("Deen音乐下载器 Web 服务启动 (v%s)", __version__)
     if GATEWAY_SOCKET:

@@ -34,6 +34,8 @@ TOKEN_ENV = "ACCESS_TOKEN"
 TOKEN_COOKIE = "deen_access"
 TOKEN_HEADER = "X-Access-Token"
 TOKEN_QUERY = "token"
+# 单独开的 MCP 端口打在请求上的标记（见 app.McpPortMiddleware）
+MCP_PORT_FLAG = "deen.mcp_port"
 
 # 无需令牌即可访问的路径（相对 SCRIPT_NAME）
 _EXEMPT_PREFIXES = ("/static/",)
@@ -69,7 +71,11 @@ def _cookie_value(token: str) -> str:
 def _request_has_valid_token(token: str) -> bool:
     if not token:
         return False
+    # 令牌可放在 X-Access-Token 头、Authorization: Bearer 头（MCP 客户端常用）或 ?token=
     presented = request.headers.get(TOKEN_HEADER) or request.args.get(TOKEN_QUERY) or ""
+    auth = request.headers.get("Authorization", "")
+    if not presented and auth.startswith("Bearer "):
+        presented = auth[len("Bearer "):].strip()
     if presented and hmac.compare_digest(presented.encode("utf-8"), token.encode("utf-8")):
         return True
     cookie = request.cookies.get(TOKEN_COOKIE) or ""
@@ -154,6 +160,12 @@ def _is_exempt(path: str) -> bool:
 
 
 def _check_access():
+    # MCP 端口：不论什么部署方式都必须带令牌（飞牛网关模式也不例外，
+    # 这个端口不经过网关）
+    if request.environ.get(MCP_PORT_FLAG):
+        if _request_has_valid_token(get_access_token()):
+            return None
+        return jsonify({"code": 1, "msg": "未授权：需要访问令牌"}), 401
     if is_gateway_mode():
         return None
     path = request.path or "/"

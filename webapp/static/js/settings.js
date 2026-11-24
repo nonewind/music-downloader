@@ -143,6 +143,7 @@ function settingsPage() {
             this.form = {
                 // Web / API 服务
                 web_port: s.web_port || "127.0.0.1:45600",
+                mcp_port: s.mcp_port || "",
                 ncm_api_port: s.ncm_api_port || "45601",
                 use_custom_api_url: s.use_custom_api_url === "true",
                 custom_api_url: s.custom_api_url || "",
@@ -194,6 +195,7 @@ function settingsPage() {
             if (f.scope_search) scope.push("search");
             return {
                 web_port: txt(f.web_port),
+                mcp_port: txt(f.mcp_port),
                 ncm_api_port: txt(f.ncm_api_port),
                 use_custom_api_url: flag(f.use_custom_api_url),
                 custom_api_url: f.use_custom_api_url ? txt(f.custom_api_url) : "",

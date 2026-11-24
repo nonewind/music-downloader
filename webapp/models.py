@@ -387,6 +387,9 @@ DEFAULT_SETTINGS = {
     # 整个局域网）；Docker 镜像经 WEB_PORT_DEFAULT 环境变量改为 0.0.0.0:45600。
     # 只影响首次写入，存量库已保存的值不变（见 init_db / default_web_port）
     "web_port": DEFAULT_WEB_PORT,
+    # MCP 端口（host:port，格式同 web_port）：另开一个只服务 /mcp 的端口给
+    # dsh 等 AI 工具连接，必须带访问令牌。空串=关闭。修改后需重启服务生效
+    "mcp_port": "",
     "output_dir": "downloads",
     # 文件名包含专辑名（歌手 - 歌名 [专辑].ext）：同歌手同名不同版本可共存
     "filename_include_album": "true",

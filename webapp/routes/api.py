@@ -1211,10 +1211,10 @@ def _validate_api_url(key: str, value: str) -> str:
 # 仅可信来源（本机 / 网关 / 令牌）可修改的设置项：
 # - 自定义 API 地址与其开关：全部账号 Cookie 会发往该地址
 # - output_dir：音乐整理的删除/移动操作以下载目录为边界
-# - web_port：监听地址（改为对外监听即扩大暴露面）
+# - web_port / mcp_port：监听地址（改为对外监听即扩大暴露面）
 _TRUSTED_ONLY_SETTINGS = _URL_SETTINGS | {
     "use_custom_api_url", "use_custom_qq_api_url", "use_custom_kugou_api_url",
-    "output_dir", "web_port",
+    "output_dir", "web_port", "mcp_port",
 }
 
 
@@ -1270,6 +1270,7 @@ def save_settings():
                 return jsonify({"code": 1, "msg": url_err}), 400
 
     port_changed = False
+    mcp_port_changed = False
     # API 服务端口只在程序启动时读取（不再提供手动启停），改了只提示重启
     api_port_changed = False
     warns = []
@@ -1296,6 +1297,8 @@ def save_settings():
             warns.append(f"{key} 档位值非法已重置")
         if key == "web_port" and str(value) != Setting.get("web_port", ""):
             port_changed = True
+        if key == "mcp_port" and str(value) != Setting.get("mcp_port", ""):
+            mcp_port_changed = True
         if key in ("ncm_api_port", "qq_api_port", "kugou_api_port") \
                 and str(value) != Setting.get(key, ""):
             api_port_changed = True
@@ -1307,6 +1310,8 @@ def save_settings():
     msg = "设置已保存"
     if port_changed:
         msg += "（Web监听地址修改需重启服务生效）"
+    if mcp_port_changed:
+        msg += "（MCP 端口修改需重启服务生效）"
     if api_port_changed:
         msg += "（API服务端口修改需重启程序生效）"
     if warns:
