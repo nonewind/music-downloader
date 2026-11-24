@@ -388,7 +388,7 @@ DEFAULT_SETTINGS = {
     # 只影响首次写入，存量库已保存的值不变（见 init_db / default_web_port）
     "web_port": DEFAULT_WEB_PORT,
     # MCP 端口（host:port，格式同 web_port）：另开一个只服务 /mcp 的端口给
-    # dsh 等 AI 工具连接，必须带访问令牌。空串=关闭。修改后需重启服务生效
+    # dsh 等 AI 工具连接，必须带访问令牌。空串=关闭。保存后立即生效
     "mcp_port": "",
     # MCP 端口是否允许外网连接：默认只接受内网和本机的连接
     "mcp_allow_public": "false",

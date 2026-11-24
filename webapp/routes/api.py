@@ -57,6 +57,7 @@ from sqlalchemy import func
 from models import Account, Playlist, Setting, Song, DownloadTask, db, get_api_base_url, PLATFORMS, PLATFORM_NAMES, vip_text_for, ACTIVE_TASK_STATUSES, ORGANIZER_JOB_ACTIVE_STATUSES, OrganizerJob, OrganizerCleanItem, LocalAudioFile
 from core.providers._bridge_base import ApiProgramError
 from core.providers.base import MusicProvider
+from routes.mcp import apply_mcp_port
 from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
                     is_trusted_request, lan_ipv4, set_token_cookie, token_from_env)
 from core.organizer import FileEntry, group_duplicates, read_easy_tags, track_no_of, year_of
@@ -1314,7 +1315,7 @@ def save_settings():
     if port_changed:
         msg += "（Web监听地址修改需重启服务生效）"
     if mcp_port_changed:
-        msg += "（MCP 端口修改需重启服务生效）"
+        msg += "；" + apply_mcp_port(current_app._get_current_object())
     if api_port_changed:
         msg += "（API服务端口修改需重启程序生效）"
     if warns:
@@ -1338,7 +1339,11 @@ def save_access_token():
     if token and len(token) < 8:
         return jsonify({"code": 1, "msg": "访问令牌至少 8 个字符"}), 400
     Setting.set(TOKEN_SETTING_KEY, token)
-    resp = jsonify({"code": 0, "msg": "访问令牌已设置" if token else "访问令牌已关闭"})
+    msg = "访问令牌已设置" if token else "访问令牌已关闭"
+    # MCP 端口开没开取决于有没有令牌，配了 MCP 端口就按新令牌重新开关
+    if Setting.get("mcp_port", "").strip():
+        msg += "；" + apply_mcp_port(current_app._get_current_object())
+    resp = jsonify({"code": 0, "msg": msg})
     if token:
         set_token_cookie(resp, token)
     logger.info("访问令牌已%s（来源 %s）", "设置" if token else "关闭", request.remote_addr)

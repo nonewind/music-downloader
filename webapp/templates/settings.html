@@ -328,7 +328,7 @@
                                     <input type="text" class="ui-input" x-model="form.mcp_port" placeholder="留空表示关闭，如 *:45604">
                                     <button type="button" class="ui-btn" :disabled="!form.mcp_port" @click="copyMcpSkill()">复制 SKILL</button>
                                 </div>
-                                <div class="set-hint">给 dsh 等 AI 工具连接用，地址为 http://内网地址:端口/mcp；格式同上；需先设置下方访问令牌，连接时带请求头 Authorization: Bearer 令牌；修改后需重启服务生效。「复制 SKILL」复制一份给 AI 看的使用说明，含内网地址和令牌，粘贴到 AI 工具里即可</div>
+                                <div class="set-hint">给 dsh 等 AI 工具连接用，地址为 http://内网地址:端口/mcp；格式同上；需先设置下方访问令牌，连接时带请求头 Authorization: Bearer 令牌；保存后立即生效。「复制 SKILL」复制一份给 AI 看的使用说明，含内网地址和令牌，粘贴到 AI 工具里即可</div>
                                 <label class="set-check">
                                     <span class="ui-check"><input type="checkbox" x-model="form.mcp_allow_public" @change="onMcpPublicChange($event)"></span>
                                     <span class="set-checktext">允许外网连接<small>默认只允许内网和本机连接；打开后拿到令牌的人可以从外网操作下载器</small></span>

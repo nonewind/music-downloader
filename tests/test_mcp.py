@@ -244,7 +244,7 @@ def test_mcp_port_setting_is_trusted_only(make_app):
     assert resp.status_code == 403
     resp = c.put("/api/settings", json={"mcp_port": "*:45604"})
     assert resp.status_code == 200
-    assert "MCP 端口修改需重启服务生效" in resp.get_json()["msg"]
+    assert "MCP 端口未开启：需要先设置访问令牌" in resp.get_json()["msg"]
     assert Setting.get("mcp_port") == "*:45604"
 
 
@@ -333,3 +333,69 @@ def test_settings_returns_lan_ip(make_app, monkeypatch):
     data = c.get("/api/settings").get_json()["data"]
     assert data["lan_ip"] == "192.168.1.20"
     assert data["mcp_allow_public"] == "false"
+
+
+# ----------------------------------------------------------------------
+# MCP 端口保存后立即生效
+# ----------------------------------------------------------------------
+@pytest.fixture
+def close_mcp_port():
+    yield
+    import routes.mcp as mcp
+    if mcp._port_server is not None:
+        mcp._port_server.shutdown()
+        mcp._port_server.server_close()
+        mcp._port_server = None
+
+
+def _ping_port(port, token):
+    import urllib.request
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/mcp",
+        data=json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=5) as resp:
+        return resp.status
+
+
+def test_mcp_port_applies_on_save(make_app, close_mcp_port):
+    import routes.mcp as mcp
+    c = make_app().test_client()
+
+    # 步骤 1：先填端口、没令牌：不开
+    resp = c.put("/api/settings", json={"mcp_port": "127.0.0.1:0"})
+    assert "MCP 端口未开启：需要先设置访问令牌" in resp.get_json()["msg"]
+    assert mcp._port_server is None
+
+    # 步骤 2：设令牌：立刻开，能连上
+    resp = c.put("/api/settings/access-token", json={"token": TOKEN})
+    assert resp.get_json()["msg"] == "访问令牌已设置；MCP 端口已开启"
+    port = mcp._port_server.server_port
+    assert _ping_port(port, TOKEN) == 200
+
+    # 步骤 3：换端口：旧的关掉，新的开
+    old = mcp._port_server
+    resp = c.put("/api/settings", json={"mcp_port": "127.0.0.1:0"}, headers={"X-Access-Token": TOKEN})
+    assert "MCP 端口" not in resp.get_json()["msg"]          # 值没变，不动端口
+    Setting.set("mcp_port", "")
+    resp = c.put("/api/settings", json={"mcp_port": "localhost:0"}, headers={"X-Access-Token": TOKEN})
+    assert "MCP 端口已开启" in resp.get_json()["msg"]
+    assert mcp._port_server is not old
+
+    # 步骤 4：清空端口：关掉
+    resp = c.put("/api/settings", json={"mcp_port": ""}, headers={"X-Access-Token": TOKEN})
+    assert "MCP 端口已关闭" in resp.get_json()["msg"]
+    assert mcp._port_server is None
+
+
+def test_clearing_token_closes_mcp_port(make_app, close_mcp_port):
+    import routes.mcp as mcp
+    c = make_app().test_client()
+    Setting.set("mcp_port", "127.0.0.1:0")
+    c.put("/api/settings/access-token", json={"token": TOKEN})
+    assert mcp._port_server is not None
+    resp = c.put("/api/settings/access-token", json={"token": ""}, headers={"X-Access-Token": TOKEN})
+    assert resp.get_json()["msg"] == "访问令牌已关闭；MCP 端口未开启：需要先设置访问令牌"
+    assert mcp._port_server is None

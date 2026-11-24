@@ -8,15 +8,18 @@
 只开放查看和下载类操作；删除、移动文件、改专辑信息、改设置和账号不开放。
 
 访问控制与 /api 相同（见 access.py）；单独开的 MCP 端口（设置项 mcp_port）
-不论什么部署方式都必须带访问令牌。
+不论什么部署方式都必须带访问令牌。MCP 端口由 apply_mcp_port 打开，启动时和
+保存相关设置时调用，改了不用重启。
 """
 
 import json
 import logging
+import threading
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
-from models import PLATFORMS
+from access import MCP_PORT_FLAG, get_access_token, parse_web_bind
+from models import PLATFORMS, Setting
 from version import get_version
 
 mcp_bp = Blueprint("mcp", __name__)
@@ -380,3 +383,66 @@ def mcp_post():
         return _rpc_result(msg_id, _call_tool(name, args))
     else:
         return _rpc_error(msg_id, _METHOD_NOT_FOUND, f"不支持的方法: {method}")
+
+
+# ----------------------------------------------------------------------
+# MCP 端口：另开一个只服务 /mcp 的端口
+# ----------------------------------------------------------------------
+class McpPortMiddleware:
+    """MCP 端口专用：只放行 /mcp，并打上标记让访问控制强制校验令牌"""
+
+    def __init__(self, app):
+        self.app = app
+
+    def __call__(self, environ, start_response):
+        if environ.get("PATH_INFO", "") != "/mcp":
+            start_response("404 Not Found", [("Content-Type", "text/plain; charset=utf-8")])
+            return [b"not found"]
+        environ[MCP_PORT_FLAG] = True
+        return self.app(environ, start_response)
+
+
+_port_server = None             # 正在运行的 MCP 端口服务
+_port_lock = threading.Lock()   # 两次保存同时到达时，不重复开端口
+
+
+def apply_mcp_port(app) -> str:
+    """关掉正在运行的 MCP 端口，再按当前设置重新打开；返回结果说明（给设置页提示用）
+
+    飞牛网关模式下程序只听 Unix Socket，dsh 等 AI 工具连不进来，靠这个端口连。
+    mcp_port 空串表示关闭；没设访问令牌时不开（这个端口不经过飞牛网关的登录）。
+    """
+    global _port_server
+    from werkzeug.serving import make_server
+
+    with _port_lock:
+        # 步骤 1：关掉旧的
+        if _port_server is not None:
+            _port_server.shutdown()
+            _port_server.server_close()
+            _port_server = None
+            logger.info("MCP 端口已关闭")
+
+        # 步骤 2：读设置；没配置 / 没令牌就不开
+        with app.app_context():
+            raw = str(Setting.get("mcp_port", "")).strip()
+            has_token = bool(get_access_token())
+        if not raw:
+            return "MCP 端口已关闭"
+        if not has_token:
+            logger.warning("MCP 端口未开启：需要先设置访问令牌（mcp_port=%s）", raw)
+            return "MCP 端口未开启：需要先设置访问令牌"
+
+        # 步骤 3：绑定端口（端口被占用等只记警告，不影响主服务）
+        host, port = parse_web_bind(raw)
+        try:
+            srv = make_server(host, port, McpPortMiddleware(app), threaded=True)
+        except OSError as e:
+            logger.warning("MCP 端口 %s:%d 开启失败: %s", host, port, e)
+            return f"MCP 端口开启失败：{e}"
+
+        # 步骤 4：后台线程服务
+        threading.Thread(target=srv.serve_forever, name="mcp-port", daemon=True).start()
+        _port_server = srv
+        logger.info("MCP 端口已开启: http://%s:%d/mcp（需带访问令牌）", host, port)
+        return "MCP 端口已开启"
