@@ -58,7 +58,7 @@ from models import Account, Playlist, Setting, Song, DownloadTask, db, get_api_b
 from core.providers._bridge_base import ApiProgramError
 from core.providers.base import MusicProvider
 from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
-                    is_trusted_request, set_token_cookie, token_from_env)
+                    is_trusted_request, lan_ipv4, set_token_cookie, token_from_env)
 from core.organizer import FileEntry, group_duplicates, read_easy_tags, track_no_of, year_of
 from organizer_manager import OrganizerBusyError
 from library import (LibraryBusyError, album_folder_for, album_rows, ensure_not_busy,
@@ -1158,6 +1158,8 @@ def get_settings():
     # 访问令牌只回报状态，永不回显明文
     data["access_token_enabled"] = bool(get_access_token())
     data["access_token_from_env"] = token_from_env()
+    # 本机内网地址：设置页「复制 SKILL」用来填 MCP 地址
+    data["lan_ip"] = lan_ipv4()
     return jsonify({"code": 0, "data": data})
 
 
@@ -1212,9 +1214,10 @@ def _validate_api_url(key: str, value: str) -> str:
 # - 自定义 API 地址与其开关：全部账号 Cookie 会发往该地址
 # - output_dir：音乐整理的删除/移动操作以下载目录为边界
 # - web_port / mcp_port：监听地址（改为对外监听即扩大暴露面）
+# - mcp_allow_public：MCP 端口允许外网连接
 _TRUSTED_ONLY_SETTINGS = _URL_SETTINGS | {
     "use_custom_api_url", "use_custom_qq_api_url", "use_custom_kugou_api_url",
-    "output_dir", "web_port", "mcp_port",
+    "output_dir", "web_port", "mcp_port", "mcp_allow_public",
 }
 
 
@@ -1222,7 +1225,7 @@ def _is_sensitive_change(key: str, value) -> bool:
     """该字段提交值是否构成敏感变更（设置页每次全量提交，未改动的字段不算）
 
     - URL：清空不算（清空只会让请求回到内置服务）
-    - use_custom_*：只有打开算
+    - use_custom_* / mcp_allow_public：只有打开算
     - 其他：值与库内不同即算
     """
     from models import DEFAULT_SETTINGS
@@ -1230,7 +1233,7 @@ def _is_sensitive_change(key: str, value) -> bool:
     cur = Setting.get(key, DEFAULT_SETTINGS.get(key, ""))
     if key in _URL_SETTINGS:
         return bool(new) and new != cur.strip()
-    if key.startswith("use_custom_"):
+    if key.startswith("use_custom_") or key == "mcp_allow_public":
         return new == "true" and cur != "true"
     return new != str(cur).strip()
 

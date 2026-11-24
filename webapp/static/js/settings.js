@@ -57,6 +57,7 @@ function settingsPage() {
         form: {},                 // loadSettings() 全量回填
         // 访问令牌（不进 form/全量 payload：独立接口保存，后端永不回显明文）
         tokenState: { enabled: false, fromEnv: false, input: "", busy: false, shown: false, saved: "" },
+        lanIp: "",   // 本机内网地址（后端探测），「复制 SKILL」填地址用
         loading: true,
         saving: false,
         section: "accounts",      // 当前分类（hash 记忆，刷新/直达不丢）；账号栏是独立组件 accountsPage
@@ -120,6 +121,7 @@ function settingsPage() {
                 this.applySettings(data.data || {});
                 this.tokenState.enabled = !!(data.data && data.data.access_token_enabled);
                 this.tokenState.fromEnv = !!(data.data && data.data.access_token_from_env);
+                this.lanIp = (data.data && data.data.lan_ip) || "";
             } catch (e) {
                 showToast(e.message, "错误", "error");
             } finally {
@@ -144,6 +146,7 @@ function settingsPage() {
                 // Web / API 服务
                 web_port: s.web_port || "127.0.0.1:45600",
                 mcp_port: s.mcp_port || "",
+                mcp_allow_public: s.mcp_allow_public === "true",
                 ncm_api_port: s.ncm_api_port || "45601",
                 use_custom_api_url: s.use_custom_api_url === "true",
                 custom_api_url: s.custom_api_url || "",
@@ -196,6 +199,7 @@ function settingsPage() {
             return {
                 web_port: txt(f.web_port),
                 mcp_port: txt(f.mcp_port),
+                mcp_allow_public: flag(f.mcp_allow_public),
                 ncm_api_port: txt(f.ncm_api_port),
                 use_custom_api_url: flag(f.use_custom_api_url),
                 custom_api_url: f.use_custom_api_url ? txt(f.custom_api_url) : "",
@@ -244,7 +248,8 @@ function settingsPage() {
         },
 
         async copyMcpSkill() {
-            // 步骤 1：算出 MCP 地址（格式同服务端 parse_web_bind）；监听所有网卡时用当前访问的主机名
+            // 步骤 1：算出 MCP 地址（格式同服务端 parse_web_bind）
+            // 监听所有网卡时用本机内网地址，不用浏览器当前打开的地址（可能是公网域名）
             const bind = String(this.form.mcp_port || "").trim();
             const sep = bind.lastIndexOf(":");
             let host = "";
@@ -253,13 +258,23 @@ function settingsPage() {
                 host = bind.slice(0, sep);
                 port = bind.slice(sep + 1);
             }
+            const missing = [];
             if (host === "" || host === "*" || host === "0.0.0.0") {
-                host = location.hostname;
+                if (this.lanIp) {
+                    host = this.lanIp;
+                } else {
+                    host = "飞牛内网地址";
+                    missing.push("内网地址");
+                }
             }
             const url = `http://${host}:${port}/mcp`;
 
             // 步骤 2：令牌只有本页刚设置过才知道，否则留占位让用户自己填
-            const token = this.tokenState.saved || "这里换成你的访问令牌";
+            let token = this.tokenState.saved;
+            if (!token) {
+                token = "这里换成你的访问令牌";
+                missing.push("访问令牌");
+            }
 
             // 步骤 3：拼出 SKILL 文本，使用说明和 MCP 连接时发给 AI 的是同一份
             const text = [
@@ -297,10 +312,28 @@ function settingsPage() {
                 showToast("复制失败：" + e.message, "错误", "error");
                 return;
             }
-            if (this.tokenState.saved) {
+            if (missing.length === 0) {
                 showToast("已复制", "成功", "success");
             } else {
-                showToast("已复制。令牌没填进去，请在文本里换成你的访问令牌", "提示", "warning");
+                showToast("已复制。" + missing.join("和") + "没填进去，请在文本里换上", "提示", "warning");
+            }
+        },
+
+        async onMcpPublicChange(e) {
+            // 只在打开时确认；取消就恢复成不勾
+            if (!e.target.checked) return;
+            const ok = await uiConfirm({
+                title: "允许外网连接 MCP 端口？",
+                message: "打开后，外网设备也能连这个端口：\n"
+                    + "- 拿到令牌的人可以搜歌、下载，看账号信息和音乐库\n"
+                    + "- 令牌走 http 明文，经过公共网络时可能被截获\n"
+                    + "- 外网要连进来，还要在路由器上转发这个端口\n"
+                    + "只在家里用 AI 工具时不用打开。",
+                confirmText: "打开",
+                danger: true,
+            });
+            if (!ok) {
+                this.form.mcp_allow_public = false;
             }
         },
 

@@ -271,3 +271,65 @@ def test_settings_page_gets_usage_guide(make_app, monkeypatch):
     app.register_blueprint(views.views_bp)
     assert app.test_client().get("/settings").status_code == 200
     assert seen["mcp_guide"] == USAGE_GUIDE
+
+
+# ----------------------------------------------------------------------
+# MCP 端口默认只让内网连
+# ----------------------------------------------------------------------
+PUBLIC = {"REMOTE_ADDR": "114.114.114.114"}
+
+
+@pytest.mark.parametrize("addr,lan", [
+    ("192.168.1.50", True), ("10.0.0.2", True), ("172.16.3.4", True), ("127.0.0.1", True),
+    ("::1", True), ("fe80::1", True), ("fd00::5", True), ("::ffff:192.168.1.9", True),
+    ("114.114.114.114", False), ("8.8.8.8", False), ("2001:4860::8888", False), ("", False),
+])
+def test_is_lan_addr(addr, lan):
+    from access import is_lan_addr
+    assert is_lan_addr(addr) is lan
+
+
+@pytest.mark.parametrize("gateway", [False, True])
+def test_mcp_port_rejects_public_by_default(make_app, gateway):
+    from access import MCP_PORT_FLAG
+    c = make_app(gateway=gateway).test_client()
+    Setting.set("access_token", TOKEN)
+    auth = {"Authorization": f"Bearer {TOKEN}"}
+    # 外网来的，带对令牌也拒绝
+    resp = _rpc(c, "ping", environ_base={MCP_PORT_FLAG: True, **PUBLIC}, headers=auth)
+    assert resp.status_code == 403
+    assert resp.get_json()["msg"] == "MCP 端口只允许内网连接"
+    # 内网来的照常
+    assert _rpc(c, "ping", environ_base={MCP_PORT_FLAG: True, **LAN}, headers=auth).status_code == 200
+    # 用户允许外网后放行，但仍要令牌
+    Setting.set("mcp_allow_public", "true")
+    assert _rpc(c, "ping", environ_base={MCP_PORT_FLAG: True, **PUBLIC}, headers=auth).status_code == 200
+    assert _rpc(c, "ping", environ_base={MCP_PORT_FLAG: True, **PUBLIC}).status_code == 401
+
+
+def test_main_port_not_affected_by_lan_rule(make_app):
+    """主端口不看来源地址（规则只管 MCP 端口）"""
+    c = make_app(gateway=True).test_client()
+    assert _rpc(c, "ping", environ_base=PUBLIC).status_code == 200
+
+
+def test_mcp_allow_public_only_trusted_can_enable(make_app):
+    c = make_app().test_client()
+    # 局域网未带令牌：打开被拒
+    resp = c.put("/api/settings", json={"mcp_allow_public": True}, environ_base=LAN)
+    assert resp.status_code == 403
+    # 本机可以打开
+    assert c.put("/api/settings", json={"mcp_allow_public": True}).status_code == 200
+    assert Setting.get("mcp_allow_public") == "true"
+    # 关闭不算敏感变更，局域网也能关
+    assert c.put("/api/settings", json={"mcp_allow_public": False}, environ_base=LAN).status_code == 200
+    assert Setting.get("mcp_allow_public") == "false"
+
+
+def test_settings_returns_lan_ip(make_app, monkeypatch):
+    import routes.api as api
+    monkeypatch.setattr(api, "lan_ipv4", lambda: "192.168.1.20")
+    c = make_app().test_client()
+    data = c.get("/api/settings").get_json()["data"]
+    assert data["lan_ip"] == "192.168.1.20"
+    assert data["mcp_allow_public"] == "false"

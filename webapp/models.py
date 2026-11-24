@@ -390,6 +390,8 @@ DEFAULT_SETTINGS = {
     # MCP 端口（host:port，格式同 web_port）：另开一个只服务 /mcp 的端口给
     # dsh 等 AI 工具连接，必须带访问令牌。空串=关闭。修改后需重启服务生效
     "mcp_port": "",
+    # MCP 端口是否允许外网连接：默认只接受内网和本机的连接
+    "mcp_allow_public": "false",
     "output_dir": "downloads",
     # 文件名包含专辑名（歌手 - 歌名 [专辑].ext）：同歌手同名不同版本可共存
     "filename_include_album": "true",

@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import ipaddress
 import os
+import socket
 from urllib.parse import urlencode
 
 from flask import Flask, Response, current_app, jsonify, redirect, request
@@ -102,6 +103,38 @@ def _is_loopback_addr(addr: str | None) -> bool:
     return ip.is_loopback
 
 
+def is_lan_addr(addr: str | None) -> bool:
+    """是否内网或本机地址（私有网段、回环、链路本地）"""
+    if not addr:
+        return False
+    try:
+        ip = ipaddress.ip_address(addr.split("%", 1)[0])
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return ip.is_private or ip.is_loopback or ip.is_link_local
+
+
+def lan_ipv4() -> str:
+    """本机的内网 IPv4 地址；找不到或不是内网地址时返回空串
+
+    UDP 的 connect 不发任何数据，只让系统选出默认网卡，再读它的地址。
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("10.255.255.255", 1))
+        addr = sock.getsockname()[0]
+    except OSError:
+        return ""
+    finally:
+        sock.close()
+    if is_lan_addr(addr) and not _is_loopback_addr(addr):
+        return addr
+    return ""
+
+
 def _host_is_loopback_name() -> bool:
     """Host 头必须是回环名：防 DNS rebinding（恶意网页把自有域名解析到
     127.0.0.1 后，以本机浏览器为跳板读取导出接口）"""
@@ -163,6 +196,12 @@ def _check_access():
     # MCP 端口：不论什么部署方式都必须带令牌（飞牛网关模式也不例外，
     # 这个端口不经过网关）
     if request.environ.get(MCP_PORT_FLAG):
+        # 步骤 1：默认只接受内网和本机的连接，外网来的先拒绝（不给猜令牌的机会）
+        from models import Setting
+        allow_public = Setting.get("mcp_allow_public", "false") == "true"
+        if not allow_public and not is_lan_addr(request.remote_addr):
+            return jsonify({"code": 1, "msg": "MCP 端口只允许内网连接"}), 403
+        # 步骤 2：必须带令牌
         if _request_has_valid_token(get_access_token()):
             return None
         return jsonify({"code": 1, "msg": "未授权：需要访问令牌"}), 401
