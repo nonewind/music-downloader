@@ -433,8 +433,12 @@ def apply_mcp_port(app) -> str:
             logger.warning("MCP 端口未开启：需要先设置访问令牌（mcp_port=%s）", raw)
             return "MCP 端口未开启：需要先设置访问令牌"
 
-        # 步骤 3：绑定端口（端口被占用等只记警告，不影响主服务）
-        host, port = parse_web_bind(raw)
+        # 步骤 3：绑定端口（格式不对、端口被占用等只记警告，不影响主服务）
+        try:
+            host, port = parse_web_bind(raw)
+        except ValueError as e:
+            logger.warning("MCP 端口未开启：%s", e)
+            return f"MCP 端口未开启：{e}"
         try:
             srv = make_server(host, port, McpPortMiddleware(app), threaded=True)
         except OSError as e:

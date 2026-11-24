@@ -111,11 +111,19 @@ def test_existing_web_port_untouched(tmp_path, monkeypatch):
     ("45602", ("0.0.0.0", 45602)),
     ("127.0.0.1:45600", ("127.0.0.1", 45600)),
     ("[::1]:45600", ("::1", 45600)),
-    ("garbage", ("127.0.0.1", 45600)),
+    (" *:45604 ", ("0.0.0.0", 45604)),
 ])
 def test_parse_web_bind(raw, expected):
     from access import parse_web_bind
     assert parse_web_bind(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["garbage", "*.45604", "*:", "", "*:abc", "*:0", "*:65536", "*:-1", "*:４５６"])
+def test_parse_web_bind_rejects_bad_format(raw):
+    """格式不对直接报错，不悄悄换成别的地址"""
+    from access import parse_web_bind
+    with pytest.raises(ValueError):
+        parse_web_bind(raw)
 
 
 def test_is_public_bind():

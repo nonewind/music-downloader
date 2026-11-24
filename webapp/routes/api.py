@@ -59,7 +59,8 @@ from core.providers._bridge_base import ApiProgramError
 from core.providers.base import MusicProvider
 from routes.mcp import apply_mcp_port
 from access import (TOKEN_SETTING_KEY, forbidden_untrusted, get_access_token,
-                    is_trusted_request, lan_ipv4, set_token_cookie, token_from_env)
+                    is_trusted_request, lan_ipv4, parse_web_bind, set_token_cookie,
+                    token_from_env)
 from core.organizer import FileEntry, group_duplicates, read_easy_tags, track_no_of, year_of
 from organizer_manager import OrganizerBusyError
 from library import (LibraryBusyError, album_folder_for, album_rows, ensure_not_busy,
@@ -1272,6 +1273,19 @@ def save_settings():
             url_err = _validate_api_url(key, str(data[key] or "").strip())
             if url_err:
                 return jsonify({"code": 1, "msg": url_err}), 400
+
+    # 监听地址格式不对直接拒绝（MCP 端口留空表示关闭）
+    bind_labels = {"web_port": ("Web 服务监听地址", "*:45600"), "mcp_port": ("MCP 端口", "*:45604")}
+    for key, (label, example) in bind_labels.items():
+        if key not in data:
+            continue
+        raw = str(data[key]).strip()
+        if key == "mcp_port" and raw == "":
+            continue
+        try:
+            parse_web_bind(raw)
+        except ValueError:
+            return jsonify({"code": 1, "msg": f"{label}格式不对：{raw}，应为 主机:端口，如 {example}"}), 400
 
     port_changed = False
     mcp_port_changed = False

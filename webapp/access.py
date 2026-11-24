@@ -252,23 +252,26 @@ def is_public_bind(host: str) -> bool:
 
 
 def parse_web_bind(raw: str) -> tuple:
-    """解析监听地址字符串 → (host, port)
+    """解析监听地址字符串 → (host, port)；格式不对抛 ValueError
 
-    支持 "host:port"、":port"、"port"、"*:port"；"*"/空 host 与纯端口号表示
-    全部网卡（与历史行为一致，存量配置语义不变）。
+    支持 "host:port"、":port"、"port"、"*:port"、"[IPv6]:port"；"*"/空 host
+    与纯端口号表示全部网卡。端口必须是 1-65535 的整数。
     """
-    raw = str(raw or "").strip()
-    if ":" not in raw:
-        try:
-            return ("0.0.0.0", int(raw))
-        except (TypeError, ValueError):
-            return ("127.0.0.1", 45600)
-    host, _, port_str = raw.rpartition(":")
+    # 步骤 1：拆出主机和端口（没有冒号就整个当端口）
+    raw = str(raw).strip()
+    if ":" in raw:
+        host, _, port_str = raw.rpartition(":")
+    else:
+        host, port_str = "", raw
+
+    # 步骤 2：端口必须是 1-65535 的整数
+    if not (port_str.isascii() and port_str.isdigit()) or not 1 <= int(port_str) <= 65535:
+        raise ValueError(f"监听地址格式不对：{raw}")
+    port = int(port_str)
+
+    # 步骤 3：主机："*" 和空表示全部网卡，IPv6 去掉方括号
     if host in ("", "*"):
         host = "0.0.0.0"
     elif host.startswith("[") and host.endswith("]"):
         host = host[1:-1]
-    try:
-        return (host, int(port_str))
-    except (TypeError, ValueError):
-        return (host, 45600)
+    return (host, port)

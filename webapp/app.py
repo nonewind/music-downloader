@@ -278,7 +278,11 @@ def _start_api_bridges(bridges: list[tuple[str, Any]]) -> None:
 
 
 def main() -> None:
-    host, port = _read_web_bind()
+    # 网关模式只听 Unix Socket，用不到监听地址
+    if GATEWAY_SOCKET:
+        host, port = "", 0
+    else:
+        host, port = _read_web_bind()
     # Setting.get 需在 app context 内调用；读出后显式传入，
     # get_bridge 自身不碰数据库
     with app.app_context():
