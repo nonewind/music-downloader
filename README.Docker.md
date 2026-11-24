@@ -47,7 +47,7 @@ v0.9.0.0 起移除了登录体系。容器内服务监听 `0.0.0.0:45600`（容�
 1. **设置访问令牌**（推荐）：在 `docker-compose.yml` 的 `environment` 段取消注释并修改
    `ACCESS_TOKEN`，然后 `docker compose up -d`。启用后所有页面与 `/api/*` 都需要令牌，
    浏览器访问一次 `http://<宿主机IP>:45600/?token=<令牌>` 后自动记住；脚本可带
-   `X-Access-Token` 请求头。`/healthz`（健康检查）免令牌。
+   `X-Access-Token` 或 `Authorization: Bearer <令牌>` 请求头。`/healthz`（健康检查）免令牌。
 2. **只允许宿主机本机访问**：把端口映射改为 `"127.0.0.1:45600:45600"`，其他设备经反向代理
    （自带鉴权）访问。
 
@@ -63,7 +63,7 @@ v0.9.0.0 起移除了登录体系。容器内服务监听 `0.0.0.0:45600`（容�
 
 | 挂载点 | 用途 |
 |--------|------|
-| `/data` | SQLite（账号/歌单/任务/设置）+ 日志 + ncm-api 临时缓存 |
+| `/data` | SQLite（账号/歌单/任务/设置）+ 日志 + ncm-api 临时缓存；换新版接口程序放 `/data/api`，见 [api/readme.txt](api/readme.txt) |
 | `/app/downloads` | 下载的音乐文件 |
 | `/app/logs` | 日志webapp.log |
 
@@ -74,6 +74,10 @@ volumes:
   - /mnt/nas/deen-data:/data
   - /mnt/nas/music:/app/downloads   # 改成宿主机绝对路径
 ```
+
+## AI 工具接入（MCP）
+
+dsh 等 AI 工具直接连 `http://<宿主机IP>:45600/mcp`，带 `Authorization: Bearer <令牌>`，不用另开 MCP 端口。说明见 [README](README.md) 的「MCP 接口」。
 
 ## 常用命令
 
